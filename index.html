@@ -102,6 +102,29 @@
     border-radius: 4px;
     cursor: pointer;
 }
+/* Bouton coordonnées */
+#coord-toggle-btn {
+    position: absolute;
+    bottom: 20px;
+    left: 280px;
+    width: 38px;
+    height: 38px;
+    background: #28a745;
+    color: white;
+    font-size: 20px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 38px;
+    cursor: pointer;
+    z-index: 2000;
+    box-shadow: 0px 2px 6px rgba(0,0,0,0.3);
+}
+
+/* Fenêtre cachée au départ */
+#coord-search-box {
+    display: none;
+}
+
 
         </style>
         <title></title>
@@ -119,6 +142,7 @@
     <p><b> Info parcelle :</b> Cliquer sur un lot pour afficher ses informations.</p>
     <button id="close-info">Fermer</button>
 </div>
+<div id="coord-toggle-btn">📍</div>
 <div id="coord-search-box">
     <h3>Recherche par coordonnées</h3>
 
@@ -130,8 +154,8 @@
 
     <input type="number" id="coord-x" placeholder="X / Longitude" step="any">
     <input type="number" id="coord-y" placeholder="Y / Latitude" step="any">
-
     <button id="coord-search-btn">Localiser</button>
+	<button id="coord-close-btn">Fermer</button>
 </div>
 
         <div id="map">
@@ -498,6 +522,20 @@ map.on('click', function(e) {
         .openOn(map);
 });
 
+// ===============================
+// AFFICHER / MASQUER COORDONNÉES
+// ===============================
+
+document.getElementById("coord-toggle-btn").onclick = function () {
+    var box = document.getElementById("coord-search-box");
+    box.style.display = (box.style.display === "none" || box.style.display === "")
+        ? "block"
+        : "none";
+};
+
+document.getElementById("coord-close-btn").onclick = function () {
+    document.getElementById("coord-search-box").style.display = "none";
+};
 
         </script>
     </body>
