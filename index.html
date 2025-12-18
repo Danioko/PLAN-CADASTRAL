@@ -14,6 +14,7 @@
         <link rel="stylesheet" href="css/leaflet-search.css">
         <link rel="stylesheet" href="css/leaflet.photon.css">
         <link rel="stylesheet" href="css/leaflet-measure.css">
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
         <style>
         #map {
     width: calc(100% - 40px); /* on réduit la largeur pour compenser les marges gauche + droite */
@@ -71,6 +72,36 @@
     font-size: 14px;
 }
 
+#coord-search-box {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    width: 240px;
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0px 0px 8px rgba(0,0,0,0.3);
+    z-index: 2000;
+    font-size: 14px;
+}
+
+#coord-search-box input,
+#coord-search-box select {
+    width: 100%;
+    margin-bottom: 6px;
+    padding: 6px;
+    box-sizing: border-box;
+}
+
+#coord-search-box button {
+    width: 100%;
+    padding: 6px;
+    background: #0078ff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
 
         </style>
         <title></title>
@@ -87,6 +118,20 @@
     <p><b> Legende :</b> Changer le fond de carte en haut à droite.</p>
     <p><b> Info parcelle :</b> Cliquer sur un lot pour afficher ses informations.</p>
     <button id="close-info">Fermer</button>
+</div>
+<div id="coord-search-box">
+    <h3>Recherche par coordonnées</h3>
+
+    <select id="coord-system">
+        <option value="wgs84">WGS84 (Lat / Lon)</option>
+        <option value="utm29">UTM Zone 29N</option>
+        <option value="utm30">UTM Zone 30N</option>
+    </select>
+
+    <input type="number" id="coord-x" placeholder="X / Longitude" step="any">
+    <input type="number" id="coord-y" placeholder="Y / Latitude" step="any">
+
+    <button id="coord-search-btn">Localiser</button>
 </div>
 
         <div id="map">
@@ -390,6 +435,70 @@ document.getElementById("map-info-btn").onclick = function() {
 document.getElementById("close-info").onclick = function() {
     document.getElementById("map-info-box").style.display = "none";
 };
+// ===============================
+// RECHERCHE PAR COORDONNÉES
+// ===============================
+
+var coordMarker;
+
+// Définition des projections UTM
+proj4.defs("UTM29", "+proj=utm +zone=29 +datum=WGS84 +units=m +no_defs");
+proj4.defs("UTM30", "+proj=utm +zone=30 +datum=WGS84 +units=m +no_defs");
+
+document.getElementById("coord-search-btn").onclick = function () {
+
+    var x = parseFloat(document.getElementById("coord-x").value);
+    var y = parseFloat(document.getElementById("coord-y").value);
+    var system = document.getElementById("coord-system").value;
+
+    if (isNaN(x) || isNaN(y)) {
+        alert("Veuillez saisir des coordonnées valides.");
+        return;
+    }
+
+    var latlng;
+
+    if (system === "wgs84") {
+        latlng = [y, x];
+    }
+
+    if (system === "utm29") {
+        var p29 = proj4("UTM29", "WGS84", [x, y]);
+        latlng = [p29[1], p29[0]];
+    }
+
+    if (system === "utm30") {
+        var p30 = proj4("UTM30", "WGS84", [x, y]);
+        latlng = [p30[1], p30[0]];
+    }
+
+    if (coordMarker) map.removeLayer(coordMarker);
+
+    coordMarker = L.marker(latlng).addTo(map)
+        .bindPopup(
+            "<b>Position localisée</b><br>" +
+            "Latitude : " + latlng[0] + "<br>" +
+            "Longitude : " + latlng[1]
+        )
+        .openPopup();
+
+    map.setView(latlng, 19);
+};
+map.on('click', function(e) {
+    var lat = e.latlng.lat.toFixed(6);
+    var lon = e.latlng.lng.toFixed(6);
+
+    L.popup()
+        .setLatLng(e.latlng)
+        .setContent(
+            "<b>Coordonnées du point</b><br>" +
+            "Latitude : " + lat + "<br>" +
+            "Longitude : " + lon
+        )
+        .openOn(map);
+});
+
+
         </script>
     </body>
 </html>
