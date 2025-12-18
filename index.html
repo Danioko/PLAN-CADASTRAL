@@ -504,6 +504,12 @@ async function exportParcellePDFAvecPlan(feature, layer) {
     // Pause pour le rendu
     await new Promise(r => setTimeout(r, 800));
 
+	// 🔹 Cacher temporairement le popup avant export
+var popup = layer.getPopup();
+if (popup && popup.isOpen()) {
+    popup._container.style.display = "none";
+}
+
     // Capture de la carte
     var mapElement = document.getElementById("map");
     const canvas = await html2canvas(mapElement, {
@@ -512,6 +518,12 @@ async function exportParcellePDFAvecPlan(feature, layer) {
     });
 
     var imgData = canvas.toDataURL("image/png");
+
+	// 🔹 Réafficher le popup après export
+if (popup && popup.isOpen()) {
+    popup._container.style.display = "block";
+}
+
 
     // Titre
     doc.setFontSize(14);
