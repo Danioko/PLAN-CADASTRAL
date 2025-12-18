@@ -125,7 +125,6 @@
     display: none;
 }
 
-
         </style>
         <title></title>
     </head>
@@ -150,6 +149,7 @@
         <option value="wgs84">WGS84 (Lat / Lon)</option>
         <option value="utm29">UTM Zone 29N</option>
         <option value="utm30">UTM Zone 30N</option>
+		<option value="utm31">UTM Zone 31N</option>
     </select>
 
     <input type="number" id="coord-x" placeholder="X / Longitude" step="any">
@@ -468,6 +468,7 @@ var coordMarker;
 // Définition des projections UTM
 proj4.defs("UTM29", "+proj=utm +zone=29 +datum=WGS84 +units=m +no_defs");
 proj4.defs("UTM30", "+proj=utm +zone=30 +datum=WGS84 +units=m +no_defs");
+proj4.defs("UTM31", "+proj=utm +zone=31 +datum=WGS84 +units=m +no_defs");
 
 document.getElementById("coord-search-btn").onclick = function () {
 
@@ -495,6 +496,11 @@ document.getElementById("coord-search-btn").onclick = function () {
         var p30 = proj4("UTM30", "WGS84", [x, y]);
         latlng = [p30[1], p30[0]];
     }
+	
+	if (system === "utm31") {
+    var p31 = proj4("UTM31", "WGS84", [x, y]);
+    latlng = [p31[1], p31[0]];
+}
 
     if (coordMarker) map.removeLayer(coordMarker);
 
