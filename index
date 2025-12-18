@@ -15,6 +15,8 @@
         <link rel="stylesheet" href="css/leaflet.photon.css">
         <link rel="stylesheet" href="css/leaflet-measure.css">
 		<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
         <style>
         #map {
     width: calc(100% - 40px); /* on réduit la largeur pour compenser les marges gauche + droite */
@@ -123,6 +125,16 @@
 /* Fenêtre cachée au départ */
 #coord-search-box {
     display: none;
+}
+/* Bouton Export PDF dans le popup */
+.pdf-btn {
+    padding: 6px 12px;
+    background: #d9534f;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
 }
 
         </style>
@@ -360,12 +372,30 @@
                         <th scope="row">TF Global</th>\
                         <td>' + (feature.properties['TF Global'] !== null ? autolinker.link(String(feature.properties['TF Global']).replace(/'/g, '\'').toLocaleString()) : '') + '</td>\
                     </tr>\
+					<tr>
+    <td colspan="2" style="text-align:center; padding-top:10px;">
+        <button class="pdf-btn">Exporter la fiche PDF</button>
+    </td>
+</tr>
                 </table>';
             var content = removeEmptyRowsFromPopupContent(popupContent, feature);
 			layer.on('popupopen', function(e) {
 				addClassToPopupIfMedia(content, e.popup);
 			});
 			layer.bindPopup(content, { maxHeight: 400 });
+			layer.on('popupopen', function (e) {
+
+    var popupEl = e.popup.getElement();
+    if (!popupEl) return;
+
+    var btn = popupEl.querySelector('.pdf-btn');
+    if (!btn) return;
+
+    btn.onclick = function () {
+        exportParcellePDFAvecPlan(feature, layer);
+    };
+});
+
         }
 
         function style_AUACAD_4_0(feature) {
@@ -459,6 +489,63 @@ document.getElementById("map-info-btn").onclick = function() {
 document.getElementById("close-info").onclick = function() {
     document.getElementById("map-info-box").style.display = "none";
 };
+
+// ===============================
+// EXPORT PDF AVEC PLAN DE SITUATION
+// ===============================
+async function exportParcellePDFAvecPlan(feature, layer) {
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF("portrait", "mm", "a4");
+
+    // Zoom sur la parcelle
+    var bounds = layer.getBounds();
+    map.fitBounds(bounds.pad(0.3));
+
+    // Pause pour le rendu
+    await new Promise(r => setTimeout(r, 800));
+
+    // Capture de la carte
+    var mapElement = document.getElementById("map");
+    const canvas = await html2canvas(mapElement, {
+        useCORS: true,
+        scale: 2
+    });
+
+    var imgData = canvas.toDataURL("image/png");
+
+    // Titre
+    doc.setFontSize(14);
+    doc.text("FICHE PARCELLAIRE – AUACAD", 20, 15);
+
+    // Infos attributaires
+    doc.setFontSize(10);
+    doc.text("Lot : " + (feature.properties.lot || ""), 20, 25);
+    doc.text("Nature : " + (feature.properties.nature || ""), 20, 32);
+    doc.text("Cercle : " + (feature.properties.cercle || ""), 20, 39);
+    doc.text("Localité : " + (feature.properties.localite || ""), 20, 46);
+    doc.text("Surface (m²) : " + (feature.properties["Aire m²"] || ""), 20, 53);
+    doc.text("TF Global : " + (feature.properties["TF Global"] || ""), 20, 60);
+
+    // Plan de situation
+    doc.addImage(imgData, "PNG", 20, 70, 170, 110);
+
+    // Pied de page
+    doc.setFontSize(8);
+    doc.text(
+        "Document généré depuis la webmap AUACAD – usage indicatif",
+        20,
+        190
+    );
+
+    // Sauvegarde
+    doc.save(
+        "Fiche_Parcelle_" +
+        (feature.properties.lot || "AUACAD") +
+        ".pdf"
+    );
+}
+
 // ===============================
 // RECHERCHE PAR COORDONNÉES
 // ===============================
