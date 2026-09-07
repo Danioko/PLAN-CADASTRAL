@@ -50,19 +50,18 @@ function addLabel(layer, id) {
     } else setTimeout(disableHoverInteraction,250);
 })();
 
-// AUACAD - Export PDF sans déplacer la webmap.
-// La carte reste exactement à la même position pendant la capture ;
-// seul le recadrage de l'image capturée est centré sur la parcelle choisie.
+// ============================================================
+// AUACAD - EXPORT PDF NORMALISE
+// - vue d'impression indépendante de la vue écran ;
+// - échelle fixe selon la surface : 1:500 / 1:1000 / 1:2000 ;
+// - parcelle sélectionnée placée au centre exact du cadre ;
+// - cadre 180 x 160 mm ;
+// - aucune déformation : la carte temporaire a exactement le même ratio ;
+// - nord, échelle et cadre en gris.
+// ============================================================
 (function () {
     function wait(ms){ return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
     function safeValue(value){ return value === null || value === undefined || value === '' ? '-' : String(value); }
-    function niceScaleFloor(value) {
-        if (!isFinite(value) || value <= 0) return 10;
-        var exponent = Math.floor(Math.log10(value));
-        var fraction = value / Math.pow(10, exponent);
-        var niceFraction = fraction >= 5 ? 5 : (fraction >= 2 ? 2 : 1);
-        return niceFraction * Math.pow(10, exponent);
-    }
 
     function collectRings(latlngs, out) {
         out = out || [];
@@ -106,8 +105,51 @@ function addLabel(layer, id) {
                 }
             });
         }
-
         return chosen || layer.getBounds();
+    }
+
+    function choosePrintScale(properties, partBounds) {
+        var area = Number(properties['Aire m²']);
+        var scale = 500;
+        if (isFinite(area)) {
+            if (area > 2000) scale = 2000;
+            else if (area > 500) scale = 1000;
+        }
+
+        // Vérification de sécurité : si la parcelle est trop grande pour le cadre,
+        // passer automatiquement à l'échelle suivante.
+        var center = partBounds.getCenter();
+        var west = L.latLng(center.lat,partBounds.getWest());
+        var east = L.latLng(center.lat,partBounds.getEast());
+        var south = L.latLng(partBounds.getSouth(),center.lng);
+        var north = L.latLng(partBounds.getNorth(),center.lng);
+        var parcelW = map.distance(west,east);
+        var parcelH = map.distance(south,north);
+
+        var scales = [500,1000,2000,5000];
+        for (var i=0;i<scales.length;i++) {
+            if (scales[i] < scale) continue;
+            var groundW = 0.180 * scales[i];
+            var groundH = 0.160 * scales[i];
+            if (parcelW <= groundW*0.70 && parcelH <= groundH*0.70) return scales[i];
+        }
+        return 5000;
+    }
+
+    function zoomForScale(latitude, scaleDenominator, cssWidthPx, frameWidthMm) {
+        // Le cadre de 180 mm représente 0,180 * échelle mètres sur le terrain.
+        var groundWidthMeters = (frameWidthMm/1000) * scaleDenominator;
+        var desiredMetersPerPixel = groundWidthMeters / cssWidthPx;
+        var initialResolution = 156543.03392804097 * Math.cos(latitude*Math.PI/180);
+        return Math.log(initialResolution/desiredMetersPerPixel)/Math.LN2;
+    }
+
+    function niceScaleFloor(value) {
+        if (!isFinite(value) || value <= 0) return 10;
+        var exponent = Math.floor(Math.log10(value));
+        var fraction = value/Math.pow(10,exponent);
+        var niceFraction = fraction >= 5 ? 5 : (fraction >= 2 ? 2 : 1);
+        return niceFraction*Math.pow(10,exponent);
     }
 
     async function exportFicheParcellaire(layer) {
@@ -123,88 +165,81 @@ function addLabel(layer, id) {
         var mapElement = document.getElementById('map');
         var hiddenControls = [];
 
+        // Sauvegarde complète de l'état de la webmap.
+        var oldCenter = map.getCenter();
+        var oldZoom = map.getZoom();
+        var oldZoomSnap = map.options.zoomSnap;
+        var oldZoomDelta = map.options.zoomDelta;
+        var oldStyle = {
+            width:mapElement.style.width,
+            height:mapElement.style.height,
+            margin:mapElement.style.margin,
+            position:mapElement.style.position,
+            left:mapElement.style.left,
+            top:mapElement.style.top,
+            zIndex:mapElement.style.zIndex
+        };
+
         try {
-            // Identifier le centre de la parcelle dans L'ETAT ACTUEL de la carte.
-            // Aucun setView(), fitBounds(), panTo() ou changement de zoom n'est effectué ici.
-            var selectedPartBounds = getClickedPartBounds(layer,clickLatLng);
-            var selectedPartCenter = selectedPartBounds.getCenter();
-            var parcelPoint = map.latLngToContainerPoint(selectedPartCenter);
+            // Déterminer la partie réellement sélectionnée avant fermeture du popup.
+            var selectedBounds = getClickedPartBounds(layer,clickLatLng);
+            var selectedCenter = selectedBounds.getCenter();
+            var printScale = choosePrintScale(p,selectedBounds);
 
             map.closePopup();
 
-            // Renforcer temporairement uniquement le contour réel de la parcelle.
+            // Fenêtre d'impression fixe 900 x 800 px = ratio exact 180/160.
+            // Elle est placée hors écran afin de ne pas gêner l'utilisateur.
+            var printWpx = 900;
+            var printHpx = 800;
+            mapElement.style.width = printWpx+'px';
+            mapElement.style.height = printHpx+'px';
+            mapElement.style.margin = '0';
+            mapElement.style.position = 'fixed';
+            mapElement.style.left = '-12000px';
+            mapElement.style.top = '0';
+            mapElement.style.zIndex = '-1';
+
+            map.invalidateSize(false);
+
+            // Autoriser un zoom fractionnaire pour respecter réellement l'échelle choisie.
+            map.options.zoomSnap = 0;
+            map.options.zoomDelta = 0.25;
+            var printZoom = zoomForScale(selectedCenter.lat,printScale,printWpx,180);
+
+            // Centre EXACT de la vue d'impression = centre de la parcelle sélectionnée.
+            map.setView(selectedCenter,printZoom,{animate:false});
+            map.invalidateSize(false);
+            await wait(1000);
+
+            // Contour rouge de la vraie couche Leaflet, sans redessin dans jsPDF.
             layer.setStyle({ color:'#e00000', weight:6, opacity:1, fillOpacity:0 });
             if (layer.bringToFront) layer.bringToFront();
-            await wait(120);
 
-            // Masquer seulement les éléments d'interface. Cela ne modifie ni le centre ni le zoom.
+            // Masquer les contrôles de Leaflet dans la vue d'impression.
             ['.leaflet-control-container','.leaflet-popup','#map-title','#map-info-btn','#map-info-box','#coord-toggle-btn','#coord-search-box'].forEach(function(selector){
                 document.querySelectorAll(selector).forEach(function(el){
                     hiddenControls.push({el:el,display:el.style.display});
                     el.style.display='none';
                 });
             });
-            await wait(120);
+            await wait(250);
 
-            // Capture EXACTE de la vue actuellement affichée.
+            // Capture de la fenêtre d'impression : aucun crop et aucune transformation.
             var canvas = await html2canvas(mapElement,{
                 useCORS:true,
                 allowTaint:false,
                 scale:2,
+                width:printWpx,
+                height:printHpx,
                 backgroundColor:'#ffffff',
                 logging:false
             });
-
-            // ------------------------------------------------------------
-            // RECADRAGE CENTRÉ SUR LA PARCELLE, SANS DÉPLACER LA CARTE
-            // ------------------------------------------------------------
-            var frameW = 180;
-            var frameH = 160;
-            var targetRatio = frameW/frameH;
-            var cssW = mapElement.clientWidth;
-            var cssH = mapElement.clientHeight;
-            var scaleX = canvas.width/cssW;
-            var scaleY = canvas.height/cssH;
-
-            // Taille de fenêtre de recadrage : suffisamment large pour garder le voisinage.
-            var cropCssW = cssW * 0.72;
-            var cropCssH = cropCssW / targetRatio;
-            if (cropCssH > cssH * 0.82) {
-                cropCssH = cssH * 0.82;
-                cropCssW = cropCssH * targetRatio;
-            }
-
-            // Réduire la fenêtre si nécessaire afin que la parcelle reste EXACTEMENT au centre
-            // sans sortir de l'image source.
-            var halfAvailableW = Math.min(parcelPoint.x, cssW - parcelPoint.x);
-            var halfAvailableH = Math.min(parcelPoint.y, cssH - parcelPoint.y);
-            var maxCenteredW = Math.max(80, halfAvailableW * 2);
-            var maxCenteredH = Math.max(80, halfAvailableH * 2);
-            if (cropCssW > maxCenteredW || cropCssH > maxCenteredH) {
-                var factor = Math.min(maxCenteredW/cropCssW, maxCenteredH/cropCssH);
-                cropCssW *= factor;
-                cropCssH *= factor;
-            }
-
-            var cropCssX = parcelPoint.x - cropCssW/2;
-            var cropCssY = parcelPoint.y - cropCssH/2;
-
-            var cropCanvas = document.createElement('canvas');
-            cropCanvas.width = Math.max(1,Math.round(cropCssW*scaleX));
-            cropCanvas.height = Math.max(1,Math.round(cropCssH*scaleY));
-            var cropCtx = cropCanvas.getContext('2d');
-            cropCtx.drawImage(
-                canvas,
-                Math.round(cropCssX*scaleX),
-                Math.round(cropCssY*scaleY),
-                Math.round(cropCssW*scaleX),
-                Math.round(cropCssH*scaleY),
-                0,0,cropCanvas.width,cropCanvas.height
-            );
-            var imgData = cropCanvas.toDataURL('image/png');
+            var imgData = canvas.toDataURL('image/png');
 
             var doc = new window.jspdf.jsPDF('portrait','mm','a4');
 
+            // En-tête.
             doc.setTextColor(25,25,25);
             doc.setFont('helvetica','bold');
             doc.setFontSize(17);
@@ -213,16 +248,20 @@ function addLabel(layer, id) {
             doc.setLineWidth(0.5);
             doc.line(15,21,195,21);
 
+            // Informations cadastrales.
             doc.setFontSize(10.5);
             var y=30;
-            [['Lot',p.lot],['Nature',p.nature],['Cercle',p.cercle],['Localité',p.localite],['Surface (m²)',p['Aire m²']],['TF Global',p['TF Global']]].forEach(function(row){
+            [['Lot',p.lot],['Nature',p.nature],['Cercle',p.cercle],['Localité',p.localite],['Surface (m²)',p['Aire m²']],['TF Global',p['TF Global']],['Échelle','1:'+printScale]].forEach(function(row){
                 doc.setFont('helvetica','bold'); doc.text(row[0]+' :',15,y);
                 doc.setFont('helvetica','normal'); doc.text(safeValue(row[1]),48,y);
                 y+=7;
             });
 
+            // Plan exactement 180 x 160 mm : ratio identique à 900 x 800 -> aucune déformation.
             var planX=15;
-            var planY=78;
+            var planY=82;
+            var frameW=180;
+            var frameH=160;
             doc.addImage(imgData,'PNG',planX,planY,frameW,frameH);
             doc.setDrawColor(135,135,135);
             doc.setLineWidth(0.45);
@@ -238,24 +277,16 @@ function addLabel(layer, id) {
             doc.setFillColor(120,120,120);
             doc.triangle(nx,ny-2,nx-2.6,ny+6,nx+2.6,ny+6,'F');
 
-            // Echelle dynamique petite et grise, calculée sur la vue réellement capturée.
-            var sampleY = parcelPoint.y;
-            var sampleLeft = Math.max(0, parcelPoint.x-50);
-            var sampleRight = Math.min(cssW, parcelPoint.x+50);
-            var p0 = map.containerPointToLatLng([sampleLeft,sampleY]);
-            var p1 = map.containerPointToLatLng([sampleRight,sampleY]);
-            var samplePixels = Math.max(1,sampleRight-sampleLeft);
-            var metersPerCssPixel = map.distance(p0,p1)/samplePixels;
-            var mmPerCssPixel = frameW/cropCssW;
-            var desiredMeters = 30/mmPerCssPixel*metersPerCssPixel;
-            var scaleMeters = niceScaleFloor(desiredMeters);
-            var scaleBarMm = (scaleMeters/metersPerCssPixel)*mmPerCssPixel;
-            scaleBarMm = Math.min(scaleBarMm,34);
-
-            var sx=planX+frameW-scaleBarMm-5;
-            var sy=planY+frameH-7;
+            // Échelle graphique basée directement sur l'échelle d'impression.
+            var groundWidthMeters = 0.180*printScale;
+            var metersPerMm = groundWidthMeters/frameW;
+            var desiredBarMeters = niceScaleFloor(32*metersPerMm);
+            var barMm = desiredBarMeters/metersPerMm;
+            if (barMm > 34) barMm = 34;
             var segments=4;
-            var segW=scaleBarMm/segments;
+            var segW=barMm/segments;
+            var sx=planX+frameW-barMm-5;
+            var sy=planY+frameH-7;
             doc.setFont('helvetica','normal');
             doc.setFontSize(5.8);
             doc.setTextColor(120,120,120);
@@ -265,12 +296,12 @@ function addLabel(layer, id) {
                 doc.rect(sx+s*segW,sy,segW,2,'FD');
             }
             for (var t=0;t<=segments;t++) {
-                var val=Math.round((scaleMeters/segments)*t);
+                var val=Math.round((desiredBarMeters/segments)*t);
                 doc.text(String(val),sx+t*segW,sy-1,{align:'center'});
             }
-            doc.text('m',sx+scaleBarMm+2,sy+1.7);
+            doc.text('m',sx+barMm+2,sy+1.7);
 
-            // Légende : seulement le lot.
+            // Légende : uniquement le numéro du lot.
             var lx=planX+6;
             var ly=planY+frameH-9;
             doc.setFillColor(255,255,255);
@@ -284,6 +315,7 @@ function addLabel(layer, id) {
             doc.setFontSize(8);
             doc.text(safeValue(p.lot),lx+8.5,ly+0.9);
 
+            // Pied de page.
             doc.setDrawColor(45,105,155);
             doc.setLineWidth(0.35);
             doc.line(15,274,195,274);
@@ -296,9 +328,27 @@ function addLabel(layer, id) {
             console.error('Erreur export PDF AUACAD :',error);
             alert("Une erreur est survenue pendant la génération de la fiche PDF.");
         } finally {
+            // Restaurer les contrôles.
             hiddenControls.forEach(function(item){ item.el.style.display=item.display; });
+
+            // Restaurer le style normal de la parcelle.
             if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.resetStyle) layer_AUACAD_4.resetStyle(layer);
-            if (popupWasOpen && layer.openPopup) setTimeout(function(){ layer.openPopup(); },150);
+
+            // Restaurer exactement la webmap initiale.
+            map.options.zoomSnap = oldZoomSnap;
+            map.options.zoomDelta = oldZoomDelta;
+            mapElement.style.width = oldStyle.width;
+            mapElement.style.height = oldStyle.height;
+            mapElement.style.margin = oldStyle.margin;
+            mapElement.style.position = oldStyle.position;
+            mapElement.style.left = oldStyle.left;
+            mapElement.style.top = oldStyle.top;
+            mapElement.style.zIndex = oldStyle.zIndex;
+            map.invalidateSize(false);
+            map.setView(oldCenter,oldZoom,{animate:false});
+            map.invalidateSize(false);
+
+            if (popupWasOpen && layer.openPopup) setTimeout(function(){ layer.openPopup(); },180);
         }
     }
 
