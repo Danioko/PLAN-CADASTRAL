@@ -1,16 +1,14 @@
 // ============================================================
-// AUACAD - EXPORT PDF V2 OPTIMISE
-// Génère une carte Leaflet indépendante de la webmap principale.
-// La parcelle sélectionnée est centrée dans une fenêtre d'impression
-// 900 x 800 px (même ratio que 180 x 160 mm) à une échelle normalisée.
-// IMPORTANT : seules les parcelles visibles dans le cadre d'impression
-// sont clonées afin d'éviter le blocage du navigateur.
+// AUACAD - EXPORT PDF V3 LEGER
+// - aucun clonage de carte Leaflet ;
+// - aucun html2canvas ;
+// - aucun fond de carte/tuiles pendant l'export ;
+// - rendu vectoriel direct dans un canvas temporaire ;
+// - parcelle sélectionnée au centre géométrique exact du cadre ;
+// - échelle normalisée 1:500 / 1:1000 / 1:2000 / 1:5000 ;
+// - aucune déformation : 900 x 800 px -> 180 x 160 mm.
 // ============================================================
 (function () {
-    function wait(ms) {
-        return new Promise(function(resolve) { setTimeout(resolve, ms); });
-    }
-
     function safeValue(value) {
         return value === null || value === undefined || value === '' ? '-' : String(value);
     }
@@ -69,6 +67,7 @@
         }
 
         if (!ring || !ring.length) return scale;
+
         var b = L.latLngBounds(ring);
         var center = b.getCenter();
         var parcelW = map.distance(L.latLng(center.lat, b.getWest()), L.latLng(center.lat, b.getEast()));
@@ -84,176 +83,103 @@
         return 5000;
     }
 
-    function zoomForScale(latitude, scaleDenominator, cssWidthPx, frameWidthMm) {
-        var groundWidthMeters = (frameWidthMm / 1000) * scaleDenominator;
-        var desiredMetersPerPixel = groundWidthMeters / cssWidthPx;
-        var initialResolution = 156543.03392804097 * Math.cos(latitude * Math.PI / 180);
-        return Math.log(initialResolution / desiredMetersPerPixel) / Math.LN2;
+    function geographicWindow(center, groundW, groundH) {
+        var R = 6378137;
+        var latRad = center.lat * Math.PI / 180;
+        var halfLatDeg = (groundH / 2) / R * 180 / Math.PI;
+        var cosLat = Math.max(0.000001, Math.cos(latRad));
+        var halfLngDeg = (groundW / 2) / (R * cosLat) * 180 / Math.PI;
+        return L.latLngBounds(
+            [center.lat - halfLatDeg, center.lng - halfLngDeg],
+            [center.lat + halfLatDeg, center.lng + halfLngDeg]
+        );
     }
 
-    function defaultParcelStyle() {
+    function latLngToPixel(latlng, center, groundW, groundH, canvasW, canvasH) {
+        var R = 6378137;
+        var lat0 = center.lat * Math.PI / 180;
+        var dLat = (latlng.lat - center.lat) * Math.PI / 180;
+        var dLng = (latlng.lng - center.lng) * Math.PI / 180;
+        var xMeters = R * Math.cos(lat0) * dLng;
+        var yMeters = R * dLat;
         return {
-            color: '#666666',
-            weight: 1,
-            opacity: 0.9,
-            fillColor: '#ffffff',
-            fillOpacity: 0
+            x: canvasW / 2 + (xMeters / groundW) * canvasW,
+            y: canvasH / 2 - (yMeters / groundH) * canvasH
         };
     }
 
-    function cloneVisibleTileLayers(sourceMap, targetMap) {
-        var clones = [];
-        sourceMap.eachLayer(function(layer) {
-            if (!(layer instanceof L.TileLayer) || !sourceMap.hasLayer(layer) || !layer._url) return;
-            try {
-                var options = {
-                    minZoom: layer.options.minZoom,
-                    maxZoom: layer.options.maxZoom,
-                    maxNativeZoom: layer.options.maxNativeZoom,
-                    tileSize: layer.options.tileSize,
-                    zoomOffset: layer.options.zoomOffset,
-                    opacity: layer.options.opacity,
-                    attribution: '',
-                    crossOrigin: layer.options.crossOrigin || true
-                };
-                clones.push(L.tileLayer(layer._url, options).addTo(targetMap));
-            } catch (e) {
-                console.warn('Fond de carte non cloné pour export PDF', e);
-            }
-        });
-        return clones;
+    function drawRing(ctx, ring, center, groundW, groundH, canvasW, canvasH, strokeStyle, lineWidth) {
+        if (!ring || ring.length < 2) return;
+        ctx.beginPath();
+        for (var i = 0; i < ring.length; i++) {
+            var pt = latLngToPixel(ring[i], center, groundW, groundH, canvasW, canvasH);
+            if (i === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = strokeStyle;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
     }
 
-    function waitForTiles(tileLayers, timeoutMs) {
-        return new Promise(function(resolve) {
-            if (!tileLayers.length) return resolve();
-            var pending = tileLayers.length;
-            var finished = false;
-            function done() {
-                if (finished) return;
-                pending--;
-                if (pending <= 0) {
-                    finished = true;
-                    resolve();
-                }
-            }
-            tileLayers.forEach(function(layer) {
-                if (layer.isLoading && !layer.isLoading()) done();
-                else layer.once('load', done);
+    function renderPlanCanvas(selectedCenter, selectedRing, printScale) {
+        var canvasW = 900;
+        var canvasH = 800;
+        var groundW = 0.180 * printScale;
+        var groundH = 0.160 * printScale;
+        var viewBounds = geographicWindow(selectedCenter, groundW, groundH).pad(0.03);
+
+        var canvas = document.createElement('canvas');
+        canvas.width = canvasW;
+        canvas.height = canvasH;
+        var ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+
+        // Dessiner uniquement les parcelles qui coupent le cadre d'impression.
+        // Aucun objet Leaflet n'est créé : on trace directement leurs coordonnées.
+        if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.eachLayer) {
+            layer_AUACAD_4.eachLayer(function(parcelLayer) {
+                if (!parcelLayer || !parcelLayer.getBounds || !parcelLayer.getLatLngs) return;
+                try {
+                    var b = parcelLayer.getBounds();
+                    if (!b || !b.isValid || !b.isValid() || !viewBounds.intersects(b)) return;
+                    var rings = collectRings(parcelLayer.getLatLngs(), []);
+                    rings.forEach(function(ring) {
+                        drawRing(ctx, ring, selectedCenter, groundW, groundH, canvasW, canvasH, '#707070', 1.35);
+                    });
+                } catch (e) {}
             });
-            setTimeout(function() {
-                if (!finished) {
-                    finished = true;
-                    resolve();
-                }
-            }, timeoutMs || 1800);
-        });
+        }
+
+        // Parcelle sélectionnée : tracée une seule fois par-dessus le plan.
+        if (selectedRing) {
+            drawRing(ctx, selectedRing, selectedCenter, groundW, groundH, canvasW, canvasH, '#e00000', 4.5);
+        }
+
+        return canvas;
     }
 
-    // Clone uniquement les entités qui coupent le cadre d'impression.
-    // On évite volontairement layer_AUACAD_4.toGeoJSON(), qui convertissait
-    // tout le cadastre (~12 Mo) à chaque export et pouvait figer Chrome.
-    function addNearbyParcels(targetMap, printBounds) {
-        if (typeof layer_AUACAD_4 === 'undefined' || !layer_AUACAD_4.eachLayer) return;
-
-        var group = L.layerGroup().addTo(targetMap);
-        var count = 0;
-
-        layer_AUACAD_4.eachLayer(function(parcelLayer) {
-            if (!parcelLayer || !parcelLayer.feature || !parcelLayer.getBounds) return;
-            try {
-                var b = parcelLayer.getBounds();
-                if (!b || !b.isValid || !b.isValid() || !printBounds.intersects(b)) return;
-
-                L.geoJSON(parcelLayer.feature, {
-                    style: defaultParcelStyle,
-                    interactive: false
-                }).addTo(group);
-                count++;
-            } catch (e) {
-                // Une géométrie invalide ne doit pas interrompre l'export.
-            }
-        });
-
-        return count;
-    }
-
-    async function exportFicheParcellaireV2(sourceLayer) {
+    async function exportFicheParcellaireV3(sourceLayer) {
         if (!sourceLayer || !sourceLayer.feature || !sourceLayer.getLatLngs) {
             alert("Impossible d'identifier la parcelle sélectionnée.");
             return;
         }
 
-        var p = sourceLayer.feature.properties || {};
-        var clickLatLng = (map._popup && map._popup.getLatLng) ? map._popup.getLatLng() : null;
-        var selectedRing = getClickedRing(sourceLayer, clickLatLng);
-        var selectedBounds = selectedRing ? L.latLngBounds(selectedRing) : sourceLayer.getBounds();
-        var selectedCenter = selectedBounds.getCenter();
-        var printScale = choosePrintScale(p, selectedRing);
-
-        var printWpx = 900;
-        var printHpx = 800;
-        var printDiv = document.createElement('div');
-        printDiv.id = 'auacad-print-map-v2';
-        printDiv.style.width = printWpx + 'px';
-        printDiv.style.height = printHpx + 'px';
-        printDiv.style.position = 'fixed';
-        printDiv.style.left = '-10000px';
-        printDiv.style.top = '0';
-        printDiv.style.margin = '0';
-        printDiv.style.padding = '0';
-        printDiv.style.background = '#ffffff';
-        printDiv.style.zIndex = '-9999';
-        document.body.appendChild(printDiv);
-
-        var printMap = null;
         try {
-            printMap = L.map(printDiv, {
-                zoomControl: false,
-                attributionControl: false,
-                zoomSnap: 0,
-                zoomDelta: 0.25,
-                zoomAnimation: false,
-                fadeAnimation: false,
-                markerZoomAnimation: false,
-                preferCanvas: false
-            });
+            var p = sourceLayer.feature.properties || {};
+            var clickLatLng = (map._popup && map._popup.getLatLng) ? map._popup.getLatLng() : null;
+            var selectedRing = getClickedRing(sourceLayer, clickLatLng);
+            var selectedBounds = selectedRing ? L.latLngBounds(selectedRing) : sourceLayer.getBounds();
+            var selectedCenter = selectedBounds.getCenter();
+            var printScale = choosePrintScale(p, selectedRing);
 
-            var printZoom = zoomForScale(selectedCenter.lat, printScale, printWpx, 180);
-            printMap.setView(selectedCenter, printZoom, { animate: false });
-            printMap.invalidateSize(false);
-
-            var tileLayers = cloneVisibleTileLayers(map, printMap);
-
-            // Une petite marge évite de couper les parcelles au bord du cadre.
-            var printBounds = printMap.getBounds().pad(0.08);
-            addNearbyParcels(printMap, printBounds);
-
-            // Contour rouge uniquement sur la parcelle choisie.
-            if (selectedRing) {
-                L.polygon(selectedRing, {
-                    color: '#e00000',
-                    weight: 5,
-                    opacity: 1,
-                    fillOpacity: 0,
-                    interactive: false
-                }).addTo(printMap).bringToFront();
-            }
-
-            await waitForTiles(tileLayers, 1800);
-            await wait(180);
-
-            var canvas = await html2canvas(printDiv, {
-                useCORS: true,
-                allowTaint: false,
-                scale: 1.5,
-                width: printWpx,
-                height: printHpx,
-                backgroundColor: '#ffffff',
-                logging: false
-            });
-
-            var imgData = canvas.toDataURL('image/jpeg', 0.92);
+            // Rendu très léger : canvas vectoriel pur, sans carte Leaflet secondaire.
+            var canvas = renderPlanCanvas(selectedCenter, selectedRing, printScale);
+            var imgData = canvas.toDataURL('image/png');
             var doc = new window.jspdf.jsPDF('portrait', 'mm', 'a4');
 
             doc.setTextColor(25, 25, 25);
@@ -286,11 +212,12 @@
             var planY = 82;
             var frameW = 180;
             var frameH = 160;
-            doc.addImage(imgData, 'JPEG', planX, planY, frameW, frameH);
+            doc.addImage(imgData, 'PNG', planX, planY, frameW, frameH);
             doc.setDrawColor(135, 135, 135);
             doc.setLineWidth(0.45);
             doc.rect(planX, planY, frameW, frameH);
 
+            // Flèche du nord petite et grise.
             var nx = planX + frameW - 8;
             var ny = planY + 10;
             doc.setTextColor(120, 120, 120);
@@ -300,6 +227,7 @@
             doc.setFillColor(120, 120, 120);
             doc.triangle(nx, ny - 2, nx - 2.6, ny + 6, nx + 2.6, ny + 6, 'F');
 
+            // Légende : uniquement le numéro du lot.
             var lx = planX + 6;
             var ly = planY + frameH - 9;
             doc.setFillColor(255, 255, 255);
@@ -322,16 +250,12 @@
 
             doc.save('Fiche_Parcelle_' + safeValue(p.lot).replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf');
         } catch (error) {
-            console.error('Erreur export PDF AUACAD V2 :', error);
+            console.error('Erreur export PDF AUACAD V3 :', error);
             alert("Une erreur est survenue pendant la génération de la fiche PDF.");
-        } finally {
-            if (printMap) {
-                try { printMap.remove(); } catch (e) {}
-            }
-            if (printDiv && printDiv.parentNode) printDiv.parentNode.removeChild(printDiv);
         }
     }
 
+    // Capture-phase : neutralise l'ancien export et utilise uniquement la V3.
     document.addEventListener('click', function(event) {
         var button = event.target.closest ? event.target.closest('.pdf-btn') : null;
         if (!button) return;
@@ -341,6 +265,6 @@
         if (event.stopImmediatePropagation) event.stopImmediatePropagation();
 
         var sourceLayer = map && map._popup ? map._popup._source : null;
-        exportFicheParcellaireV2(sourceLayer);
+        exportFicheParcellaireV3(sourceLayer);
     }, true);
 })();
