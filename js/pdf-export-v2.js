@@ -1,11 +1,14 @@
 // ============================================================
-// AUACAD - EXPORT PDF V4
+// AUACAD - EXPORT PDF V5
 // - rendu léger en canvas ;
-// - fond de plan actif repris dans l'export quand il autorise CORS ;
-// - parcelle sélectionnée centrée au cadre ;
+// - parcelle sélectionnée centrée ;
 // - échelle normalisée ;
 // - aucune déformation ;
-// - cadre noir, parcellaire gris, parcelle sélectionnée rouge.
+// - cadre noir, parcellaire gris, parcelle sélectionnée rouge ;
+// - fond actif exporté quand CORS le permet ;
+// - Google Satellite/Hybrid bascule vers Esri World Imagery pour le PDF,
+//   car les tuiles Google ne sont pas exportables de façon fiable depuis
+//   un canvas sur GitHub Pages.
 // ============================================================
 (function () {
     function safeValue(value) {
@@ -137,15 +140,43 @@
         return L.latLng(latRad * 180 / Math.PI, lng);
     }
 
-    function tileUrl(layer, x, y, z) {
-        var url = layer._url;
-        var maxY = Math.pow(2, z) - 1;
-        var subdomains = layer.options && layer.options.subdomains;
-        var s = 'a';
-        if (Array.isArray(subdomains) && subdomains.length) s = subdomains[0];
-        else if (typeof subdomains === 'string' && subdomains.length) s = subdomains.charAt(0);
+    function isGoogleLayer(layer) {
+        if (!layer || !layer._url) return false;
+        return /google\.com\/vt|googleapis\.com/i.test(layer._url);
+    }
 
-        if (layer.options && layer.options.tms) y = maxY - y;
+    function basemapDescriptor(layer) {
+        if (!layer) return null;
+
+        // Les tuiles Google Satellite et Hybrid sont visibles dans Leaflet,
+        // mais elles bloquent l'export canvas (CORS). Pour le PDF, on utilise
+        // donc un fond satellite équivalent et exportable : Esri World Imagery.
+        if (isGoogleLayer(layer)) {
+            return {
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                minZoom: 0,
+                maxZoom: 23,
+                tms: false,
+                subdomains: ''
+            };
+        }
+
+        return {
+            url: layer._url,
+            minZoom: isFinite(layer.options.minZoom) ? layer.options.minZoom : 0,
+            maxZoom: isFinite(layer.options.maxNativeZoom) ? layer.options.maxNativeZoom : (isFinite(layer.options.maxZoom) ? layer.options.maxZoom : 22),
+            tms: !!layer.options.tms,
+            subdomains: layer.options.subdomains || ''
+        };
+    }
+
+    function tileUrlFromDescriptor(desc, x, y, z) {
+        var url = desc.url;
+        var maxY = Math.pow(2, z) - 1;
+        var s = 'a';
+        if (Array.isArray(desc.subdomains) && desc.subdomains.length) s = desc.subdomains[0];
+        else if (typeof desc.subdomains === 'string' && desc.subdomains.length) s = desc.subdomains.charAt(0);
+        if (desc.tms) y = maxY - y;
 
         return url
             .replace('{s}', s)
@@ -164,7 +195,7 @@
                 if (settled) return;
                 settled = true;
                 resolve(null);
-            }, timeoutMs || 1800);
+            }, timeoutMs || 2500);
 
             img.crossOrigin = 'anonymous';
             img.onload = function() {
@@ -186,13 +217,13 @@
     async function drawActiveBasemap(ctx, center, groundW, groundH, canvasW, canvasH) {
         var layer = getActiveTileLayer();
         if (!layer) return false;
+        var desc = basemapDescriptor(layer);
+        if (!desc) return false;
 
         var targetMpp = groundW / canvasW;
         var initialResolution = 156543.03392804097 * Math.cos(center.lat * Math.PI / 180);
         var z = Math.round(Math.log(initialResolution / targetMpp) / Math.LN2);
-        var minZoom = isFinite(layer.options.minZoom) ? layer.options.minZoom : 0;
-        var maxZoom = isFinite(layer.options.maxNativeZoom) ? layer.options.maxNativeZoom : (isFinite(layer.options.maxZoom) ? layer.options.maxZoom : 22);
-        z = Math.max(minZoom, Math.min(maxZoom, z));
+        z = Math.max(desc.minZoom, Math.min(desc.maxZoom, z));
 
         var view = geographicWindow(center, groundW, groundH);
         var nwTile = tileXY(view.getNorth(), view.getWest(), z);
@@ -205,12 +236,12 @@
         var jobs = [];
         for (var x = minX; x <= maxX; x++) {
             for (var y = minY; y <= maxY; y++) {
-                jobs.push({x:x, y:y, url:tileUrl(layer, x, y, z)});
+                jobs.push({x:x, y:y, url:tileUrlFromDescriptor(desc, x, y, z)});
             }
         }
 
         var results = await Promise.all(jobs.map(function(job) {
-            return loadImage(job.url, 1800).then(function(img) {
+            return loadImage(job.url, 2500).then(function(img) {
                 return {job:job, img:img};
             });
         }));
@@ -218,52 +249,25 @@
         var drawn = 0;
         results.forEach(function(item) {
             if (!item.img) return;
-            var x = item.job.x;
-            var y = item.job.y;
-            var nw = tileLatLng(x, y, z);
-            var se = tileLatLng(x + 1, y + 1, z);
+            var nw = tileLatLng(item.job.x, item.job.y, z);
+            var se = tileLatLng(item.job.x + 1, item.job.y + 1, z);
             var p1 = latLngToPixel(nw, center, groundW, groundH, canvasW, canvasH);
             var p2 = latLngToPixel(se, center, groundW, groundH, canvasW, canvasH);
-            var dx = p1.x;
-            var dy = p1.y;
-            var dw = p2.x - p1.x;
-            var dh = p2.y - p1.y;
             try {
-                ctx.drawImage(item.img, dx, dy, dw, dh);
+                ctx.drawImage(item.img, p1.x, p1.y, p2.x - p1.x, p2.y - p1.y);
                 drawn++;
             } catch (e) {}
         });
-
         return drawn > 0;
     }
 
-    async function renderPlanCanvas(selectedCenter, selectedRing, printScale) {
-        var canvasW = 900;
-        var canvasH = 800;
+    function drawCadastre(ctx, selectedCenter, selectedRing, printScale, canvasW, canvasH) {
         var groundW = 0.180 * printScale;
         var groundH = 0.160 * printScale;
         var viewBounds = geographicWindow(selectedCenter, groundW, groundH).pad(0.03);
-
-        var canvas = document.createElement('canvas');
-        canvas.width = canvasW;
-        canvas.height = canvasH;
-        var ctx = canvas.getContext('2d');
-
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvasW, canvasH);
-
-        // Fond de plan actif en premier. Si le fournisseur bloque CORS,
-        // l'export reste fonctionnel et retombe sur le fond blanc.
-        try {
-            await drawActiveBasemap(ctx, selectedCenter, groundW, groundH, canvasW, canvasH);
-        } catch (e) {
-            console.warn('Fond de plan non exportable, export vectoriel conservé.', e);
-        }
-
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
 
-        // Parcellaire par-dessus le fond de plan.
         if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.eachLayer) {
             layer_AUACAD_4.eachLayer(function(parcelLayer) {
                 if (!parcelLayer || !parcelLayer.getBounds || !parcelLayer.getLatLngs) return;
@@ -280,11 +284,32 @@
         if (selectedRing) {
             drawRing(ctx, selectedRing, selectedCenter, groundW, groundH, canvasW, canvasH, '#e00000', 4.5);
         }
+    }
 
+    async function renderPlanCanvas(selectedCenter, selectedRing, printScale) {
+        var canvasW = 900;
+        var canvasH = 800;
+        var groundW = 0.180 * printScale;
+        var groundH = 0.160 * printScale;
+        var canvas = document.createElement('canvas');
+        canvas.width = canvasW;
+        canvas.height = canvasH;
+        var ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+
+        try {
+            await drawActiveBasemap(ctx, selectedCenter, groundW, groundH, canvasW, canvasH);
+        } catch (e) {
+            console.warn('Fond de plan non exportable.', e);
+        }
+
+        drawCadastre(ctx, selectedCenter, selectedRing, printScale, canvasW, canvasH);
         return canvas;
     }
 
-    async function exportFicheParcellaireV4(sourceLayer) {
+    async function exportFicheParcellaireV5(sourceLayer) {
         if (!sourceLayer || !sourceLayer.feature || !sourceLayer.getLatLngs) {
             alert("Impossible d'identifier la parcelle sélectionnée.");
             return;
@@ -303,33 +328,17 @@
             try {
                 imgData = canvas.toDataURL('image/png');
             } catch (e) {
-                // Sécurité : si un fournisseur de tuiles a contaminé le canvas,
-                // refaire immédiatement le plan sans fond de carte.
                 var clean = document.createElement('canvas');
-                clean.width = 900; clean.height = 800;
+                clean.width = 900;
+                clean.height = 800;
                 var cleanCtx = clean.getContext('2d');
-                cleanCtx.fillStyle = '#ffffff'; cleanCtx.fillRect(0,0,900,800);
-                var groundW = 0.180 * printScale;
-                var groundH = 0.160 * printScale;
-                var viewBounds = geographicWindow(selectedCenter, groundW, groundH).pad(0.03);
-                if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.eachLayer) {
-                    layer_AUACAD_4.eachLayer(function(parcelLayer) {
-                        if (!parcelLayer || !parcelLayer.getBounds || !parcelLayer.getLatLngs) return;
-                        try {
-                            var b=parcelLayer.getBounds();
-                            if(!b||!b.isValid||!b.isValid()||!viewBounds.intersects(b))return;
-                            collectRings(parcelLayer.getLatLngs(),[]).forEach(function(ring){
-                                drawRing(cleanCtx,ring,selectedCenter,groundW,groundH,900,800,'#707070',1.35);
-                            });
-                        } catch(err) {}
-                    });
-                }
-                if(selectedRing)drawRing(cleanCtx,selectedRing,selectedCenter,groundW,groundH,900,800,'#e00000',4.5);
+                cleanCtx.fillStyle = '#ffffff';
+                cleanCtx.fillRect(0, 0, 900, 800);
+                drawCadastre(cleanCtx, selectedCenter, selectedRing, printScale, 900, 800);
                 imgData = clean.toDataURL('image/png');
             }
 
             var doc = new window.jspdf.jsPDF('portrait', 'mm', 'a4');
-
             doc.setTextColor(25,25,25);
             doc.setFont('helvetica','bold');
             doc.setFontSize(17);
@@ -341,8 +350,10 @@
             doc.setFontSize(10.5);
             var y=30;
             [['Lot',p.lot],['Nature',p.nature],['Cercle',p.cercle],['Localité',p.localite],['Surface (m²)',p['Aire m²']],['TF Global',p['TF Global']],['Échelle','1:'+printScale]].forEach(function(row){
-                doc.setFont('helvetica','bold'); doc.text(row[0]+' :',15,y);
-                doc.setFont('helvetica','normal'); doc.text(safeValue(row[1]),48,y);
+                doc.setFont('helvetica','bold');
+                doc.text(row[0]+' :',15,y);
+                doc.setFont('helvetica','normal');
+                doc.text(safeValue(row[1]),48,y);
                 y+=7;
             });
 
@@ -381,19 +392,19 @@
             doc.text('Document généré depuis la webmap AUACAD - usage indicatif',15,281);
 
             doc.save('Fiche_Parcelle_'+safeValue(p.lot).replace(/[^a-zA-Z0-9_-]/g,'_')+'.pdf');
-        } catch (error) {
-            console.error('Erreur export PDF AUACAD V4 :', error);
+        } catch(error) {
+            console.error('Erreur export PDF AUACAD V5 :',error);
             alert("Une erreur est survenue pendant la génération de la fiche PDF.");
         }
     }
 
-    document.addEventListener('click', function(event) {
-        var button = event.target.closest ? event.target.closest('.pdf-btn') : null;
-        if (!button) return;
+    document.addEventListener('click',function(event){
+        var button=event.target.closest ? event.target.closest('.pdf-btn') : null;
+        if(!button)return;
         event.preventDefault();
         event.stopPropagation();
-        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-        var sourceLayer = map && map._popup ? map._popup._source : null;
-        exportFicheParcellaireV4(sourceLayer);
-    }, true);
+        if(event.stopImmediatePropagation)event.stopImmediatePropagation();
+        var sourceLayer=map&&map._popup?map._popup._source:null;
+        exportFicheParcellaireV5(sourceLayer);
+    },true);
 })();
