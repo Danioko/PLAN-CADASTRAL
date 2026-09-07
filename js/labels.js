@@ -15,9 +15,7 @@ var totalMarkers = 0;
 function resetLabels(markers) {
     labelEngine.reset();
     var i = 0;
-    for (var j = 0; j < markers.length; j++) {
-        markers[j].eachLayer(function(label){ addLabel(label, ++i); });
-    }
+    for (var j = 0; j < markers.length; j++) markers[j].eachLayer(function(label){ addLabel(label, ++i); });
     labelEngine.update();
 }
 
@@ -35,35 +33,28 @@ function addLabel(layer, id) {
     }
 }
 
-// Désactiver la surbrillance et l'ouverture des informations au survol.
-// Les popups restent liés aux parcelles et s'ouvrent donc uniquement au clic.
+// Pas de surbrillance ni popup au survol : informations uniquement au clic.
 (function () {
     function disableHoverInteraction() {
         if (typeof layer_AUACAD_4 === 'undefined' || !layer_AUACAD_4.eachLayer) {
-            setTimeout(disableHoverInteraction, 250);
+            setTimeout(disableHoverInteraction,250);
             return;
         }
-
-        layer_AUACAD_4.eachLayer(function(parcelLayer) {
+        layer_AUACAD_4.eachLayer(function(parcelLayer){
             parcelLayer.off('mouseover');
             parcelLayer.off('mouseout');
         });
     }
-
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(disableHoverInteraction, 250);
-        });
-    } else {
-        setTimeout(disableHoverInteraction, 250);
-    }
+        document.addEventListener('DOMContentLoaded',function(){ setTimeout(disableHoverInteraction,250); });
+    } else setTimeout(disableHoverInteraction,250);
 })();
 
-// AUACAD - Export PDF : capture fidèle de la carte, sans redessiner les parcelles.
+// AUACAD - Export PDF : capture fidèle, parcelle sélectionnée centrée.
 (function () {
-    function wait(ms) { return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
-    function safeValue(value) { return value === null || value === undefined || value === '' ? '-' : String(value); }
-    function waitForMapMovement() {
+    function wait(ms){ return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
+    function safeValue(value){ return value === null || value === undefined || value === '' ? '-' : String(value); }
+    function waitForMapMovement(){
         return new Promise(function(resolve){
             var done=false;
             function finish(){ if(done)return; done=true; resolve(); }
@@ -77,33 +68,35 @@ function addLabel(layer, id) {
             alert("Impossible d'identifier la parcelle sélectionnée.");
             return;
         }
-        var p = layer.feature.properties || {};
-        var oldCenter = map.getCenter();
-        var oldZoom = map.getZoom();
-        var popup = layer.getPopup ? layer.getPopup() : null;
-        var popupWasOpen = !!(popup && popup.isOpen && popup.isOpen());
-        var mapElement = document.getElementById('map');
+        var p=layer.feature.properties || {};
+        var oldCenter=map.getCenter();
+        var oldZoom=map.getZoom();
+        var popup=layer.getPopup ? layer.getPopup() : null;
+        var popupWasOpen=!!(popup && popup.isOpen && popup.isOpen());
+        var mapElement=document.getElementById('map');
         var hiddenControls=[];
 
         try {
             map.closePopup();
 
-            // Cadrer uniquement la parcelle et son voisinage proche.
-            map.fitBounds(layer.getBounds().pad(1.45), {animate:false, maxZoom:21});
-            await waitForMapMovement();
-            await wait(300);
+            // 1) Déterminer un zoom adapté à la parcelle.
+            var parcelBounds=layer.getBounds();
+            var parcelCenter=parcelBounds.getCenter();
+            var targetZoom=map.getBoundsZoom(parcelBounds.pad(3.0),false);
+            targetZoom=Math.min(targetZoom,20);
 
-            // NE PAS REDESSINER : on modifie seulement le style du vrai objet Leaflet.
-            // Pas de remplissage : seul le contour rouge épais identifie la parcelle.
-            layer.setStyle({
-                color:'#e00000',
-                weight:6,
-                opacity:1,
-                fillOpacity:0
-            });
+            // 2) Centrer explicitement le centroïde de la parcelle au centre de la carte.
+            // Contrairement à fitBounds seul, le cadrage PDF reste ainsi symétrique autour du lot.
+            map.setView(parcelCenter,targetZoom,{animate:false});
+            await waitForMapMovement();
+            map.panTo(parcelCenter,{animate:false});
+            await wait(350);
+
+            // Modifier seulement le vrai contour Leaflet : aucun redessin dans jsPDF.
+            layer.setStyle({ color:'#e00000', weight:6, opacity:1, fillOpacity:0 });
             if (layer.bringToFront) layer.bringToFront();
 
-            // Cacher uniquement les éléments d'interface, jamais les couches cadastrales.
+            // Masquer l'interface, sans masquer les données cadastrales.
             ['.leaflet-control-container','.leaflet-popup','#map-title','#map-info-btn','#map-info-box','#coord-toggle-btn','#coord-search-box'].forEach(function(selector){
                 document.querySelectorAll(selector).forEach(function(el){
                     hiddenControls.push({el:el,display:el.style.display});
@@ -112,8 +105,8 @@ function addLabel(layer, id) {
             });
             await wait(150);
 
-            // Capture unique de la carte telle qu'elle est réellement affichée.
-            var canvas = await html2canvas(mapElement, {
+            // Capture de la carte déjà centrée sur la parcelle.
+            var canvas=await html2canvas(mapElement,{
                 useCORS:true,
                 allowTaint:false,
                 scale:2,
@@ -134,15 +127,13 @@ function addLabel(layer, id) {
             doc.setFontSize(10.5);
             var y=30;
             [['Lot',p.lot],['Nature',p.nature],['Cercle',p.cercle],['Localité',p.localite],['Surface (m²)',p['Aire m²']],['TF Global',p['TF Global']]].forEach(function(row){
-                doc.setFont('helvetica','bold');
-                doc.text(row[0]+' :',15,y);
-                doc.setFont('helvetica','normal');
-                doc.text(safeValue(row[1]),48,y);
+                doc.setFont('helvetica','bold'); doc.text(row[0]+' :',15,y);
+                doc.setFont('helvetica','normal'); doc.text(safeValue(row[1]),48,y);
                 y+=7;
             });
 
-            // Le PDF reçoit uniquement l'image capturée : aucune géométrie n'est ajoutée par-dessus.
-            var planX=15, planY=78, planW=180, planH=180;
+            // Grand plan : l'image est utilisée telle quelle, sans aucune géométrie ajoutée.
+            var planX=15,planY=78,planW=180,planH=180;
             doc.setDrawColor(110,110,110);
             doc.setLineWidth(0.35);
             doc.rect(planX,planY,planW,planH);
@@ -153,7 +144,6 @@ function addLabel(layer, id) {
             doc.setTextColor(80,80,80);
             doc.setFontSize(7.5);
             doc.text('Document généré depuis la webmap AUACAD - usage indicatif',15,281);
-
             doc.save('Fiche_Parcelle_'+safeValue(p.lot).replace(/[^a-zA-Z0-9_-]/g,'_')+'.pdf');
         } catch(error) {
             console.error('Erreur export PDF AUACAD :',error);
