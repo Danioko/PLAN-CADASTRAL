@@ -48,10 +48,9 @@ function addLabel(layer, id) {
     }
 }
 
-// Charger le nouvel export AVANT la fin du parsing de la page.
-// Il utilise une carte Leaflet temporaire indépendante afin d'assurer
-// un centrage exact de la parcelle et de ne jamais déplacer la webmap.
-document.write('<script src="js/pdf-export-v2.js"><\\/script>');
+// Charger explicitement la version PDF à fond blanc et contour cadastral uniquement.
+// Le paramètre de version évite que le navigateur réutilise une ancienne version en cache.
+document.write('<script src="js/pdf-export-v2.js?v=20260907-white"><\\/script>');
 
 // Désactiver la surbrillance et l'ouverture des informations au survol.
 // Les informations restent disponibles au clic sur la parcelle.
