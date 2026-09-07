@@ -10,6 +10,11 @@
 // ============================================================
 (function () {
     function safeValue(value) { return value === null || value === undefined || value === '' ? '-' : String(value); }
+    function cleanFilePart(value) {
+        var text = safeValue(value);
+        if (text.normalize) text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        return text.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
+    }
     function collectRings(latlngs,out){out=out||[];if(!Array.isArray(latlngs)||!latlngs.length)return out;if(latlngs[0]&&typeof latlngs[0].lat==='number'){out.push(latlngs);return out;}latlngs.forEach(function(item){collectRings(item,out);});return out;}
     function getClickedRing(layer,clickLatLng){var rings=collectRings(layer.getLatLngs?layer.getLatLngs():[],[]);if(!rings.length)return null;var chosen=null,bestDistance=Infinity;rings.forEach(function(ring){if(!ring||ring.length<3)return;var b=L.latLngBounds(ring);if(clickLatLng&&b.contains(clickLatLng)){var d=map.distance(b.getCenter(),clickLatLng);if(d<bestDistance){bestDistance=d;chosen=ring;}}});if(!chosen&&clickLatLng){rings.forEach(function(ring){if(!ring||ring.length<3)return;var b=L.latLngBounds(ring),d=map.distance(b.getCenter(),clickLatLng);if(d<bestDistance){bestDistance=d;chosen=ring;}});}return chosen||rings[0];}
     function choosePrintScale(properties,ring){var area=Number(properties['Aire m²']),scale=500;if(isFinite(area)){if(area>2000)scale=2000;else if(area>500)scale=1000;}if(!ring||!ring.length)return scale;var b=L.latLngBounds(ring),center=b.getCenter();var parcelW=map.distance(L.latLng(center.lat,b.getWest()),L.latLng(center.lat,b.getEast()));var parcelH=map.distance(L.latLng(b.getSouth(),center.lng),L.latLng(b.getNorth(),center.lng));var scales=[500,1000,2000,5000];for(var i=0;i<scales.length;i++){if(scales[i]<scale)continue;var groundW=0.180*scales[i],groundH=0.160*scales[i];if(parcelW<=groundW*0.65&&parcelH<=groundH*0.65)return scales[i];}return 5000;}
@@ -71,8 +76,6 @@
             return;
         }
 
-        // Si la parcelle comporte beaucoup de sommets, la première page reste lisible
-        // et le tableau complet est reporté sur une deuxième page.
         doc.setTextColor(110,110,110);doc.setFont('helvetica','italic');doc.setFontSize(6.2);
         doc.text(title+' — voir tableau complet page 2',left,startY);
         doc.addPage('a4','portrait');
@@ -117,15 +120,15 @@
             var nx=planX+frameW-8,ny=planY+10;doc.setTextColor(120,120,120);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.text('N',nx,ny-4,{align:'center'});doc.setFillColor(120,120,120);doc.triangle(nx,ny-2,nx-2.6,ny+6,nx+2.6,ny+6,'F');
             var lx=planX+6,ly=planY+frameH-9;doc.setFillColor(255,255,255);doc.setDrawColor(190,190,190);doc.setLineWidth(0.2);doc.rect(lx-2.5,ly-4.5,23,8.5,'FD');doc.setDrawColor(224,0,0);doc.setLineWidth(0.8);doc.rect(lx,ly-2.1,6,4.2);doc.setTextColor(90,90,90);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(safeValue(p.lot),lx+8.5,ly+0.9);
 
-            // Date d'impression : petite, grise et à l'extérieur du cadre, en bas à droite.
             doc.setTextColor(125,125,125);doc.setFont('helvetica','normal');doc.setFontSize(6.2);
             doc.text("Date d'impression : "+printDate,planX+frameW,planY+frameH+4,{align:'right'});
 
-            // Tableau automatique des coordonnées UTM des sommets.
             drawCoordinateTable(doc,utmData,250,5);
 
             doc.setDrawColor(45,105,155);doc.setLineWidth(0.35);doc.line(15,274,195,274);doc.setTextColor(80,80,80);doc.setFontSize(7.5);doc.text('Document généré depuis la webmap AUACAD - usage indicatif',15,281);
-            doc.save('Fiche_Parcelle_'+safeValue(p.lot).replace(/[^a-zA-Z0-9_-]/g,'_')+'.pdf');
+
+            var fileName='Fiche_'+cleanFilePart(p.lot)+'_'+cleanFilePart(p['TF Global'])+'_'+cleanFilePart(p.localite)+'.pdf';
+            doc.save(fileName);
         }catch(error){console.error('Erreur export PDF AUACAD V3 :',error);alert("Une erreur est survenue pendant la génération de la fiche PDF.");}
     }
     document.addEventListener('click',function(event){var button=event.target.closest?event.target.closest('.pdf-btn'):null;if(!button)return;event.preventDefault();event.stopPropagation();if(event.stopImmediatePropagation)event.stopImmediatePropagation();var sourceLayer=map&&map._popup?map._popup._source:null;exportFicheParcellaireV3(sourceLayer);},true);
