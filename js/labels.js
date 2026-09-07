@@ -50,18 +50,12 @@ function addLabel(layer, id) {
     } else setTimeout(disableHoverInteraction,250);
 })();
 
-// AUACAD - Export PDF centré sur la partie de géométrie réellement cliquée.
+// AUACAD - Export PDF sans déplacer la webmap.
+// La carte reste exactement à la même position pendant la capture ;
+// seul le recadrage de l'image capturée est centré sur la parcelle choisie.
 (function () {
     function wait(ms){ return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
     function safeValue(value){ return value === null || value === undefined || value === '' ? '-' : String(value); }
-    function waitForMapMovement(){
-        return new Promise(function(resolve){
-            var done=false;
-            function finish(){ if(done)return; done=true; resolve(); }
-            map.once('moveend',finish);
-            setTimeout(finish,1200);
-        });
-    }
     function niceScaleFloor(value) {
         if (!isFinite(value) || value <= 0) return 10;
         var exponent = Math.floor(Math.log10(value));
@@ -70,7 +64,6 @@ function addLabel(layer, id) {
         return niceFraction * Math.pow(10, exponent);
     }
 
-    // Récupère tous les anneaux polygonaux rendus par Leaflet.
     function collectRings(latlngs, out) {
         out = out || [];
         if (!Array.isArray(latlngs) || !latlngs.length) return out;
@@ -82,8 +75,6 @@ function addLabel(layer, id) {
         return out;
     }
 
-    // Choisit la partie de la géométrie la plus proche du point réellement cliqué.
-    // Ceci évite de centrer sur l'emprise globale d'un objet multiparties.
     function getClickedPartBounds(layer, clickLatLng) {
         if (!layer || !layer.getLatLngs) return layer.getBounds();
         var rings = collectRings(layer.getLatLngs(),[]);
@@ -96,8 +87,7 @@ function addLabel(layer, id) {
             if (!ring || ring.length < 3) return;
             var b = L.latLngBounds(ring);
             if (clickLatLng && b.contains(clickLatLng)) {
-                var c = b.getCenter();
-                var d = map.distance(c,clickLatLng);
+                var d = map.distance(b.getCenter(),clickLatLng);
                 if (d < bestDistance) {
                     bestDistance = d;
                     chosen = b;
@@ -126,48 +116,38 @@ function addLabel(layer, id) {
             return;
         }
 
-        var p=layer.feature.properties || {};
-        var oldCenter=map.getCenter();
-        var oldZoom=map.getZoom();
-        var popup=layer.getPopup ? layer.getPopup() : null;
-        var popupWasOpen=!!(popup && popup.isOpen && popup.isOpen());
+        var p = layer.feature.properties || {};
+        var popup = layer.getPopup ? layer.getPopup() : null;
+        var popupWasOpen = !!(popup && popup.isOpen && popup.isOpen());
         var clickLatLng = (map._popup && map._popup.getLatLng) ? map._popup.getLatLng() : null;
-        var mapElement=document.getElementById('map');
-        var hiddenControls=[];
+        var mapElement = document.getElementById('map');
+        var hiddenControls = [];
 
         try {
-            // IMPORTANT : identifier d'abord la partie cliquée avant de fermer le popup.
+            // Identifier le centre de la parcelle dans L'ETAT ACTUEL de la carte.
+            // Aucun setView(), fitBounds(), panTo() ou changement de zoom n'est effectué ici.
             var selectedPartBounds = getClickedPartBounds(layer,clickLatLng);
             var selectedPartCenter = selectedPartBounds.getCenter();
+            var parcelPoint = map.latLngToContainerPoint(selectedPartCenter);
 
             map.closePopup();
 
-            // Zoom calculé sur la seule parcelle cliquée, pas sur toute une éventuelle géométrie multiparties.
-            var targetZoom = map.getBoundsZoom(selectedPartBounds.pad(4.0),false);
-            targetZoom = Math.min(targetZoom,20);
-            targetZoom = Math.max(targetZoom,17);
-
-            // Le centre réel du plan devient le centre de la partie cliquée.
-            map.setView(selectedPartCenter,targetZoom,{animate:false});
-            await waitForMapMovement();
-            map.setView(selectedPartCenter,targetZoom,{animate:false});
-            await wait(450);
-
-            // Seul le vrai contour Leaflet est renforcé, sans redessin dans le PDF.
+            // Renforcer temporairement uniquement le contour réel de la parcelle.
             layer.setStyle({ color:'#e00000', weight:6, opacity:1, fillOpacity:0 });
             if (layer.bringToFront) layer.bringToFront();
             await wait(120);
 
-            // Masquer seulement l'interface de la webmap.
+            // Masquer seulement les éléments d'interface. Cela ne modifie ni le centre ni le zoom.
             ['.leaflet-control-container','.leaflet-popup','#map-title','#map-info-btn','#map-info-box','#coord-toggle-btn','#coord-search-box'].forEach(function(selector){
                 document.querySelectorAll(selector).forEach(function(el){
                     hiddenControls.push({el:el,display:el.style.display});
                     el.style.display='none';
                 });
             });
-            await wait(150);
+            await wait(120);
 
-            var canvas=await html2canvas(mapElement,{
+            // Capture EXACTE de la vue actuellement affichée.
+            var canvas = await html2canvas(mapElement,{
                 useCORS:true,
                 allowTaint:false,
                 scale:2,
@@ -175,32 +155,44 @@ function addLabel(layer, id) {
                 logging:false
             });
 
-            // RECADRAGE SANS DEFORMATION : la fenêtre est centrée sur le CENTRE DE LA CARTE.
-            // Comme la carte a été recentrée sur la partie cliquée, la parcelle est mécaniquement au centre.
-            var frameW=180;
-            var frameH=160;
-            var targetRatio=frameW/frameH;
-            var cssW=mapElement.clientWidth;
-            var cssH=mapElement.clientHeight;
-            var scaleX=canvas.width/cssW;
-            var scaleY=canvas.height/cssH;
+            // ------------------------------------------------------------
+            // RECADRAGE CENTRÉ SUR LA PARCELLE, SANS DÉPLACER LA CARTE
+            // ------------------------------------------------------------
+            var frameW = 180;
+            var frameH = 160;
+            var targetRatio = frameW/frameH;
+            var cssW = mapElement.clientWidth;
+            var cssH = mapElement.clientHeight;
+            var scaleX = canvas.width/cssW;
+            var scaleY = canvas.height/cssH;
 
-            var cropCssW, cropCssH;
-            if ((cssW/cssH) > targetRatio) {
-                cropCssH=cssH*0.88;
-                cropCssW=cropCssH*targetRatio;
-            } else {
-                cropCssW=cssW*0.88;
-                cropCssH=cropCssW/targetRatio;
+            // Taille de fenêtre de recadrage : suffisamment large pour garder le voisinage.
+            var cropCssW = cssW * 0.72;
+            var cropCssH = cropCssW / targetRatio;
+            if (cropCssH > cssH * 0.82) {
+                cropCssH = cssH * 0.82;
+                cropCssW = cropCssH * targetRatio;
             }
 
-            var cropCssX=(cssW-cropCssW)/2;
-            var cropCssY=(cssH-cropCssH)/2;
+            // Réduire la fenêtre si nécessaire afin que la parcelle reste EXACTEMENT au centre
+            // sans sortir de l'image source.
+            var halfAvailableW = Math.min(parcelPoint.x, cssW - parcelPoint.x);
+            var halfAvailableH = Math.min(parcelPoint.y, cssH - parcelPoint.y);
+            var maxCenteredW = Math.max(80, halfAvailableW * 2);
+            var maxCenteredH = Math.max(80, halfAvailableH * 2);
+            if (cropCssW > maxCenteredW || cropCssH > maxCenteredH) {
+                var factor = Math.min(maxCenteredW/cropCssW, maxCenteredH/cropCssH);
+                cropCssW *= factor;
+                cropCssH *= factor;
+            }
 
-            var cropCanvas=document.createElement('canvas');
-            cropCanvas.width=Math.max(1,Math.round(cropCssW*scaleX));
-            cropCanvas.height=Math.max(1,Math.round(cropCssH*scaleY));
-            var cropCtx=cropCanvas.getContext('2d');
+            var cropCssX = parcelPoint.x - cropCssW/2;
+            var cropCssY = parcelPoint.y - cropCssH/2;
+
+            var cropCanvas = document.createElement('canvas');
+            cropCanvas.width = Math.max(1,Math.round(cropCssW*scaleX));
+            cropCanvas.height = Math.max(1,Math.round(cropCssH*scaleY));
+            var cropCtx = cropCanvas.getContext('2d');
             cropCtx.drawImage(
                 canvas,
                 Math.round(cropCssX*scaleX),
@@ -209,11 +201,10 @@ function addLabel(layer, id) {
                 Math.round(cropCssH*scaleY),
                 0,0,cropCanvas.width,cropCanvas.height
             );
-            var imgData=cropCanvas.toDataURL('image/png');
+            var imgData = cropCanvas.toDataURL('image/png');
 
-            var doc=new window.jspdf.jsPDF('portrait','mm','a4');
+            var doc = new window.jspdf.jsPDF('portrait','mm','a4');
 
-            // En-tête et informations.
             doc.setTextColor(25,25,25);
             doc.setFont('helvetica','bold');
             doc.setFontSize(17);
@@ -230,7 +221,6 @@ function addLabel(layer, id) {
                 y+=7;
             });
 
-            // Plan sans déformation, cadre gris.
             var planX=15;
             var planY=78;
             doc.addImage(imgData,'PNG',planX,planY,frameW,frameH);
@@ -248,16 +238,19 @@ function addLabel(layer, id) {
             doc.setFillColor(120,120,120);
             doc.triangle(nx,ny-2,nx-2.6,ny+6,nx+2.6,ny+6,'F');
 
-            // Echelle dynamique petite et grise.
-            var midY=cssH/2;
-            var p0=map.containerPointToLatLng([cssW/2-50,midY]);
-            var p1=map.containerPointToLatLng([cssW/2+50,midY]);
-            var metersPerCssPixel=map.distance(p0,p1)/100;
-            var mmPerCssPixel=frameW/cropCssW;
-            var desiredMeters=30/mmPerCssPixel*metersPerCssPixel;
-            var scaleMeters=niceScaleFloor(desiredMeters);
-            var scaleBarMm=(scaleMeters/metersPerCssPixel)*mmPerCssPixel;
-            scaleBarMm=Math.min(scaleBarMm,34);
+            // Echelle dynamique petite et grise, calculée sur la vue réellement capturée.
+            var sampleY = parcelPoint.y;
+            var sampleLeft = Math.max(0, parcelPoint.x-50);
+            var sampleRight = Math.min(cssW, parcelPoint.x+50);
+            var p0 = map.containerPointToLatLng([sampleLeft,sampleY]);
+            var p1 = map.containerPointToLatLng([sampleRight,sampleY]);
+            var samplePixels = Math.max(1,sampleRight-sampleLeft);
+            var metersPerCssPixel = map.distance(p0,p1)/samplePixels;
+            var mmPerCssPixel = frameW/cropCssW;
+            var desiredMeters = 30/mmPerCssPixel*metersPerCssPixel;
+            var scaleMeters = niceScaleFloor(desiredMeters);
+            var scaleBarMm = (scaleMeters/metersPerCssPixel)*mmPerCssPixel;
+            scaleBarMm = Math.min(scaleBarMm,34);
 
             var sx=planX+frameW-scaleBarMm-5;
             var sy=planY+frameH-7;
@@ -277,7 +270,7 @@ function addLabel(layer, id) {
             }
             doc.text('m',sx+scaleBarMm+2,sy+1.7);
 
-            // Légende : uniquement le numéro du lot.
+            // Légende : seulement le lot.
             var lx=planX+6;
             var ly=planY+frameH-9;
             doc.setFillColor(255,255,255);
@@ -291,7 +284,6 @@ function addLabel(layer, id) {
             doc.setFontSize(8);
             doc.text(safeValue(p.lot),lx+8.5,ly+0.9);
 
-            // Pied de page.
             doc.setDrawColor(45,105,155);
             doc.setLineWidth(0.35);
             doc.line(15,274,195,274);
@@ -306,7 +298,6 @@ function addLabel(layer, id) {
         } finally {
             hiddenControls.forEach(function(item){ item.el.style.display=item.display; });
             if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.resetStyle) layer_AUACAD_4.resetStyle(layer);
-            map.setView(oldCenter,oldZoom,{animate:false});
             if (popupWasOpen && layer.openPopup) setTimeout(function(){ layer.openPopup(); },150);
         }
     }
