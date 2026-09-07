@@ -50,7 +50,7 @@ function addLabel(layer, id) {
     } else setTimeout(disableHoverInteraction,250);
 })();
 
-// AUACAD - Export PDF : capture centrée, cadrée et sans aucune déformation.
+// AUACAD - Export PDF : capture centrée sur la géométrie réellement rendue, sans déformation.
 (function () {
     function wait(ms){ return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
     function safeValue(value){ return value === null || value === undefined || value === '' ? '-' : String(value); }
@@ -87,7 +87,6 @@ function addLabel(layer, id) {
         try {
             map.closePopup();
 
-            // Centrer réellement la parcelle dans la carte avant la capture.
             var parcelBounds=layer.getBounds();
             var parcelCenter=parcelBounds.getCenter();
             var targetZoom=map.getBoundsZoom(parcelBounds.pad(4.0),false);
@@ -100,6 +99,22 @@ function addLabel(layer, id) {
             // Seul le vrai contour Leaflet est renforcé, sans redessin dans le PDF.
             layer.setStyle({ color:'#e00000', weight:6, opacity:1, fillOpacity:0 });
             if (layer.bringToFront) layer.bringToFront();
+            await wait(80);
+
+            // Centre de la parcelle basé sur sa position réellement rendue dans le SVG Leaflet.
+            // Cette méthode corrige le décalage que peut produire html2canvas avec les transformations Leaflet.
+            var mapRect=mapElement.getBoundingClientRect();
+            var renderedCenter=null;
+            if (layer._path && layer._path.getBoundingClientRect) {
+                var pathRect=layer._path.getBoundingClientRect();
+                renderedCenter={
+                    x:(pathRect.left + pathRect.right)/2 - mapRect.left,
+                    y:(pathRect.top + pathRect.bottom)/2 - mapRect.top
+                };
+            }
+            if (!renderedCenter || !isFinite(renderedCenter.x) || !isFinite(renderedCenter.y)) {
+                renderedCenter=map.latLngToContainerPoint(parcelCenter);
+            }
 
             // Masquer seulement l'interface de la webmap.
             ['.leaflet-control-container','.leaflet-popup','#map-title','#map-info-btn','#map-info-box','#coord-toggle-btn','#coord-search-box'].forEach(function(selector){
@@ -110,7 +125,6 @@ function addLabel(layer, id) {
             });
             await wait(150);
 
-            // Capture complète de la carte.
             var canvas=await html2canvas(mapElement,{
                 useCORS:true,
                 allowTaint:false,
@@ -121,9 +135,8 @@ function addLabel(layer, id) {
 
             // ------------------------------------------------------------
             // RECADRAGE SANS DEFORMATION
-            // On découpe une fenêtre centrée sur la parcelle, avec exactement
-            // le même rapport largeur/hauteur que le cadre du PDF.
-            // Aucune mise à l'échelle dissociée X/Y n'est appliquée.
+            // Le recadrage est centré sur la position réellement rendue de la parcelle.
+            // Le ratio de l'image recadrée est strictement celui du cadre PDF.
             // ------------------------------------------------------------
             var frameW=180;
             var frameH=160;
@@ -135,20 +148,31 @@ function addLabel(layer, id) {
 
             var cropCssW, cropCssH;
             if ((cssW/cssH) > targetRatio) {
-                cropCssH = cssH * 0.90;
+                cropCssH = cssH * 0.88;
                 cropCssW = cropCssH * targetRatio;
             } else {
-                cropCssW = cssW * 0.90;
+                cropCssW = cssW * 0.88;
                 cropCssH = cropCssW / targetRatio;
             }
 
-            var centerPt=map.latLngToContainerPoint(parcelCenter);
-            var cropCssX=Math.max(0, Math.min(cssW-cropCssW, centerPt.x-cropCssW/2));
-            var cropCssY=Math.max(0, Math.min(cssH-cropCssH, centerPt.y-cropCssH/2));
+            // On centre d'abord la fenêtre exactement sur la parcelle.
+            // Si le recadrage touche un bord, on réduit légèrement la fenêtre plutôt que de décaler la parcelle.
+            var maxHalfW=Math.min(renderedCenter.x, cssW-renderedCenter.x);
+            var maxHalfH=Math.min(renderedCenter.y, cssH-renderedCenter.y);
+            var allowedW=Math.max(80, maxHalfW*2);
+            var allowedH=Math.max(80, maxHalfH*2);
+            if (cropCssW>allowedW || cropCssH>allowedH) {
+                var reduction=Math.min(allowedW/cropCssW, allowedH/cropCssH);
+                cropCssW*=reduction;
+                cropCssH*=reduction;
+            }
+
+            var cropCssX=renderedCenter.x-cropCssW/2;
+            var cropCssY=renderedCenter.y-cropCssH/2;
 
             var cropCanvas=document.createElement('canvas');
-            cropCanvas.width=Math.round(cropCssW*scaleX);
-            cropCanvas.height=Math.round(cropCssH*scaleY);
+            cropCanvas.width=Math.max(1,Math.round(cropCssW*scaleX));
+            cropCanvas.height=Math.max(1,Math.round(cropCssH*scaleY));
             var cropCtx=cropCanvas.getContext('2d');
             cropCtx.drawImage(
                 canvas,
@@ -179,66 +203,66 @@ function addLabel(layer, id) {
                 y+=7;
             });
 
-            // Plan : image et cadre ont exactement le même ratio -> aucune déformation.
+            // Plan : aucune déformation, cadre gris.
             var planX=15;
             var planY=78;
             doc.addImage(imgData,'PNG',planX,planY,frameW,frameH);
-            doc.setDrawColor(35,35,35);
-            doc.setLineWidth(0.6);
+            doc.setDrawColor(125,125,125);
+            doc.setLineWidth(0.45);
             doc.rect(planX,planY,frameW,frameH);
 
-            // Flèche du nord, en haut à droite du cadre.
-            var nx=planX+frameW-10;
-            var ny=planY+13;
-            doc.setTextColor(10,10,10);
+            // Flèche du nord réduite et grise.
+            var nx=planX+frameW-8;
+            var ny=planY+10;
+            doc.setTextColor(105,105,105);
             doc.setFont('helvetica','bold');
-            doc.setFontSize(11);
-            doc.text('N',nx,ny-6,{align:'center'});
-            doc.setFillColor(10,10,10);
-            doc.triangle(nx,ny-3,nx-4,ny+9,nx+4,ny+9,'F');
+            doc.setFontSize(8.5);
+            doc.text('N',nx,ny-4,{align:'center'});
+            doc.setFillColor(105,105,105);
+            doc.triangle(nx,ny-2,nx-2.8,ny+6.5,nx+2.8,ny+6.5,'F');
 
-            // Echelle dynamique calculée depuis la vraie carte Leaflet.
+            // Echelle dynamique plus petite et entièrement grise.
             var midY=cssH/2;
             var p0=map.containerPointToLatLng([cssW/2-50,midY]);
             var p1=map.containerPointToLatLng([cssW/2+50,midY]);
             var metersPerCssPixel=map.distance(p0,p1)/100;
             var mmPerCssPixel=frameW/cropCssW;
-            var desiredMeters=50/mmPerCssPixel*metersPerCssPixel;
+            var desiredMeters=34/mmPerCssPixel*metersPerCssPixel;
             var scaleMeters=niceScaleFloor(desiredMeters);
             var scaleBarMm=(scaleMeters/metersPerCssPixel)*mmPerCssPixel;
-            scaleBarMm=Math.min(scaleBarMm,55);
+            scaleBarMm=Math.min(scaleBarMm,38);
 
-            var sx=planX+frameW-scaleBarMm-6;
-            var sy=planY+frameH-9;
+            var sx=planX+frameW-scaleBarMm-5;
+            var sy=planY+frameH-7;
             var segments=4;
             var segW=scaleBarMm/segments;
             doc.setFont('helvetica','normal');
-            doc.setFontSize(7.5);
-            doc.setTextColor(20,20,20);
+            doc.setFontSize(6.3);
+            doc.setTextColor(105,105,105);
             for (var s=0;s<segments;s++) {
-                if (s%2===0) doc.setFillColor(0,0,0); else doc.setFillColor(255,255,255);
-                doc.setDrawColor(0,0,0);
-                doc.rect(sx+s*segW,sy,segW,3,'FD');
+                if (s%2===0) doc.setFillColor(115,115,115); else doc.setFillColor(235,235,235);
+                doc.setDrawColor(115,115,115);
+                doc.rect(sx+s*segW,sy,segW,2.2,'FD');
             }
             for (var t=0;t<=segments;t++) {
                 var val=Math.round((scaleMeters/segments)*t);
-                doc.text(String(val),sx+t*segW,sy-1.5,{align:'center'});
+                doc.text(String(val),sx+t*segW,sy-1.1,{align:'center'});
             }
-            doc.text('m',sx+scaleBarMm+3,sy+2.5);
+            doc.text('m',sx+scaleBarMm+2.2,sy+1.9);
 
             // Légende : uniquement le numéro du lot.
-            var lx=planX+7;
-            var ly=planY+frameH-11;
+            var lx=planX+6;
+            var ly=planY+frameH-9;
             doc.setFillColor(255,255,255);
-            doc.setDrawColor(210,210,210);
-            doc.rect(lx-3,ly-5,27,10,'FD');
+            doc.setDrawColor(190,190,190);
+            doc.rect(lx-2.5,ly-4.5,23,8.5,'FD');
             doc.setDrawColor(224,0,0);
-            doc.setLineWidth(0.9);
-            doc.rect(lx,ly-2.5,7,5);
-            doc.setTextColor(20,20,20);
+            doc.setLineWidth(0.8);
+            doc.rect(lx,ly-2.1,6,4.2);
+            doc.setTextColor(90,90,90);
             doc.setFont('helvetica','normal');
-            doc.setFontSize(9);
-            doc.text(safeValue(p.lot),lx+10,ly+1);
+            doc.setFontSize(8);
+            doc.text(safeValue(p.lot),lx+8.5,ly+0.9);
 
             // Pied de page.
             doc.setDrawColor(45,105,155);
