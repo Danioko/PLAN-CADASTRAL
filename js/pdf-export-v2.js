@@ -1,8 +1,10 @@
 // ============================================================
-// AUACAD - EXPORT PDF V2
+// AUACAD - EXPORT PDF V2 OPTIMISE
 // Génère une carte Leaflet indépendante de la webmap principale.
 // La parcelle sélectionnée est centrée dans une fenêtre d'impression
 // 900 x 800 px (même ratio que 180 x 160 mm) à une échelle normalisée.
+// IMPORTANT : seules les parcelles visibles dans le cadre d'impression
+// sont clonées afin d'éviter le blocage du navigateur.
 // ============================================================
 (function () {
     function wait(ms) {
@@ -89,7 +91,7 @@
         return Math.log(initialResolution / desiredMetersPerPixel) / Math.LN2;
     }
 
-    function defaultParcelStyle(feature) {
+    function defaultParcelStyle() {
         return {
             color: '#666666',
             weight: 1,
@@ -114,8 +116,7 @@
                     attribution: '',
                     crossOrigin: layer.options.crossOrigin || true
                 };
-                var clone = L.tileLayer(layer._url, options).addTo(targetMap);
-                clones.push(clone);
+                clones.push(L.tileLayer(layer._url, options).addTo(targetMap));
             } catch (e) {
                 console.warn('Fond de carte non cloné pour export PDF', e);
             }
@@ -125,10 +126,7 @@
 
     function waitForTiles(tileLayers, timeoutMs) {
         return new Promise(function(resolve) {
-            if (!tileLayers.length) {
-                resolve();
-                return;
-            }
+            if (!tileLayers.length) return resolve();
             var pending = tileLayers.length;
             var finished = false;
             function done() {
@@ -150,6 +148,34 @@
                 }
             }, timeoutMs || 1800);
         });
+    }
+
+    // Clone uniquement les entités qui coupent le cadre d'impression.
+    // On évite volontairement layer_AUACAD_4.toGeoJSON(), qui convertissait
+    // tout le cadastre (~12 Mo) à chaque export et pouvait figer Chrome.
+    function addNearbyParcels(targetMap, printBounds) {
+        if (typeof layer_AUACAD_4 === 'undefined' || !layer_AUACAD_4.eachLayer) return;
+
+        var group = L.layerGroup().addTo(targetMap);
+        var count = 0;
+
+        layer_AUACAD_4.eachLayer(function(parcelLayer) {
+            if (!parcelLayer || !parcelLayer.feature || !parcelLayer.getBounds) return;
+            try {
+                var b = parcelLayer.getBounds();
+                if (!b || !b.isValid || !b.isValid() || !printBounds.intersects(b)) return;
+
+                L.geoJSON(parcelLayer.feature, {
+                    style: defaultParcelStyle,
+                    interactive: false
+                }).addTo(group);
+                count++;
+            } catch (e) {
+                // Une géométrie invalide ne doit pas interrompre l'export.
+            }
+        });
+
+        return count;
     }
 
     async function exportFicheParcellaireV2(sourceLayer) {
@@ -193,20 +219,15 @@
                 preferCanvas: false
             });
 
-            var tileLayers = cloneVisibleTileLayers(map, printMap);
-
-            // Une seule copie des parcelles : pas de superposition avec la webmap principale.
-            if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.toGeoJSON) {
-                L.geoJSON(layer_AUACAD_4.toGeoJSON(), {
-                    style: defaultParcelStyle,
-                    interactive: false
-                }).addTo(printMap);
-            }
-
             var printZoom = zoomForScale(selectedCenter.lat, printScale, printWpx, 180);
             printMap.setView(selectedCenter, printZoom, { animate: false });
             printMap.invalidateSize(false);
-            printMap.setView(selectedCenter, printZoom, { animate: false });
+
+            var tileLayers = cloneVisibleTileLayers(map, printMap);
+
+            // Une petite marge évite de couper les parcelles au bord du cadre.
+            var printBounds = printMap.getBounds().pad(0.08);
+            addNearbyParcels(printMap, printBounds);
 
             // Contour rouge uniquement sur la parcelle choisie.
             if (selectedRing) {
@@ -219,24 +240,20 @@
                 }).addTo(printMap).bringToFront();
             }
 
-            await waitForTiles(tileLayers, 2200);
-            await wait(350);
-
-            // Vérification finale : le centre cartographique correspond exactement au centre de la parcelle.
-            printMap.setView(selectedCenter, printZoom, { animate: false });
-            await wait(120);
+            await waitForTiles(tileLayers, 1800);
+            await wait(180);
 
             var canvas = await html2canvas(printDiv, {
                 useCORS: true,
                 allowTaint: false,
-                scale: 2,
+                scale: 1.5,
                 width: printWpx,
                 height: printHpx,
                 backgroundColor: '#ffffff',
                 logging: false
             });
 
-            var imgData = canvas.toDataURL('image/png');
+            var imgData = canvas.toDataURL('image/jpeg', 0.92);
             var doc = new window.jspdf.jsPDF('portrait', 'mm', 'a4');
 
             doc.setTextColor(25, 25, 25);
@@ -269,12 +286,11 @@
             var planY = 82;
             var frameW = 180;
             var frameH = 160;
-            doc.addImage(imgData, 'PNG', planX, planY, frameW, frameH);
+            doc.addImage(imgData, 'JPEG', planX, planY, frameW, frameH);
             doc.setDrawColor(135, 135, 135);
             doc.setLineWidth(0.45);
             doc.rect(planX, planY, frameW, frameH);
 
-            // Flèche du nord grise et discrète.
             var nx = planX + frameW - 8;
             var ny = planY + 10;
             doc.setTextColor(120, 120, 120);
@@ -284,7 +300,6 @@
             doc.setFillColor(120, 120, 120);
             doc.triangle(nx, ny - 2, nx - 2.6, ny + 6, nx + 2.6, ny + 6, 'F');
 
-            // Légende : uniquement le numéro du lot.
             var lx = planX + 6;
             var ly = planY + frameH - 9;
             doc.setFillColor(255, 255, 255);
@@ -317,7 +332,6 @@
         }
     }
 
-    // Capture-phase : ce gestionnaire doit être chargé AVANT labels.js pour neutraliser l'ancien export.
     document.addEventListener('click', function(event) {
         var button = event.target.closest ? event.target.closest('.pdf-btn') : null;
         if (!button) return;
