@@ -20,50 +20,43 @@ function resetLabels(markers) {
             addLabel(label, ++i);
         });
     }
-  labelEngine.update();
+    labelEngine.update();
 }
 
 function addLabel(layer, id) {
+    if (layer.getTooltip()) {
+        var label = layer.getTooltip()._source._tooltip._container;
+        if (label) {
+            var rect = label.getBoundingClientRect();
+            var bottomLeft = map.containerPointToLatLng([rect.left, rect.bottom]);
+            var topRight = map.containerPointToLatLng([rect.right, rect.top]);
+            var boundingBox = {
+                bottomLeft : [bottomLeft.lng, bottomLeft.lat],
+                topRight   : [topRight.lng, topRight.lat]
+            };
 
-  // This is ugly but there is no getContainer method on the tooltip :(
-  if (layer.getTooltip()) {
-      var label = layer.getTooltip()._source._tooltip._container;
-      if (label) {
+            labelEngine.ingestLabel(
+                boundingBox,
+                id,
+                parseInt(Math.random() * (5 - 1) + 1),
+                label,
+                "Test " + id,
+                false
+            );
 
-        // We need the bounding rectangle of the label itself
-        var rect = label.getBoundingClientRect();
-
-        // We convert the container coordinates (screen space) to Lat/lng
-        var bottomLeft = map.containerPointToLatLng([rect.left, rect.bottom]);
-        var topRight = map.containerPointToLatLng([rect.right, rect.top]);
-        var boundingBox = {
-          bottomLeft : [bottomLeft.lng, bottomLeft.lat],
-          topRight   : [topRight.lng, topRight.lat]
-        };
-
-        // Ingest the label into labelgun itself
-        labelEngine.ingestLabel(
-          boundingBox,
-          id,
-          parseInt(Math.random() * (5 - 1) + 1), // Weight
-          label,
-          "Test " + id,
-          false
-        );
-
-        // If the label hasn't been added to the map already
-        // add it and set the added flag to true
-        if (!layer.added) {
-          layer.addTo(map);
-          layer.added = true;
+            if (!layer.added) {
+                layer.addTo(map);
+                layer.added = true;
+            }
         }
-      }
-  }
+    }
 }
 
 // ============================================================
-// AUACAD - FICHE PARCELLAIRE PDF V2
-// Parcelle sélectionnée en surbrillance + détails à côté du plan
+// AUACAD - FICHE PARCELLAIRE PDF V3
+// Informations uniquement en haut à gauche + parcelle garantie
+// en surbrillance sur le plan, même si html2canvas ne capture pas
+// correctement les vecteurs SVG Leaflet.
 // ============================================================
 (function () {
     function wait(ms) {
@@ -87,7 +80,70 @@ function addLabel(layer, id) {
         });
     }
 
-    async function exportFicheParcellaireV2(layer) {
+    function flattenLatLngs(latlngs, result) {
+        result = result || [];
+        if (!latlngs) return result;
+
+        if (Array.isArray(latlngs) && latlngs.length && latlngs[0] && typeof latlngs[0].lat === 'number') {
+            result.push(latlngs);
+            return result;
+        }
+
+        if (Array.isArray(latlngs)) {
+            latlngs.forEach(function(item) {
+                flattenLatLngs(item, result);
+            });
+        }
+        return result;
+    }
+
+    function drawLeafletPolygonOnPdf(doc, leafletLayer, mapRect, pageRect, fillSelected) {
+        if (!leafletLayer || !leafletLayer.getLatLngs) return;
+
+        var rings = flattenLatLngs(leafletLayer.getLatLngs());
+        if (!rings.length) return;
+
+        var sx = pageRect.w / mapRect.w;
+        var sy = pageRect.h / mapRect.h;
+
+        rings.forEach(function(ring) {
+            if (!ring || ring.length < 3) return;
+
+            var points = ring.map(function(latlng) {
+                var pt = map.latLngToContainerPoint(latlng);
+                return {
+                    x: pageRect.x + pt.x * sx,
+                    y: pageRect.y + pt.y * sy
+                };
+            });
+
+            var first = points[0];
+            var deltas = [];
+            for (var i = 1; i < points.length; i++) {
+                deltas.push([
+                    points[i].x - points[i - 1].x,
+                    points[i].y - points[i - 1].y
+                ]);
+            }
+            deltas.push([
+                first.x - points[points.length - 1].x,
+                first.y - points[points.length - 1].y
+            ]);
+
+            if (fillSelected) {
+                doc.setFillColor(255, 220, 80);
+                doc.setDrawColor(220, 35, 35);
+                doc.setLineWidth(1.1);
+                doc.lines(deltas, first.x, first.y, [1, 1], 'FD', true);
+            } else {
+                doc.setDrawColor(125, 125, 125);
+                doc.setLineWidth(0.25);
+                doc.lines(deltas, first.x, first.y, [1, 1], 'S', true);
+            }
+        });
+    }
+
+    async function exportFicheParcellaireV3(layer) {
         if (!layer || !layer.feature || !layer.getBounds) {
             alert("Impossible d'identifier la parcelle sélectionnée.");
             return;
@@ -103,28 +159,28 @@ function addLabel(layer, id) {
         var hiddenControls = [];
 
         try {
-            // Fermer le popup d'origine pour qu'il n'apparaisse pas sur le plan.
             map.closePopup();
 
-            // Mettre clairement en évidence la parcelle concernée.
+            // Zoom suffisant pour voir la parcelle et son voisinage immédiat.
+            var bounds = layer.getBounds();
+            map.fitBounds(bounds.pad(1.35), { animate: false, maxZoom: 21 });
+            await waitForMapMovement();
+            await wait(300);
+
+            // Style temporaire visible à l'écran pendant la préparation.
             layer.setStyle({
-                color: '#c62828',
+                color: '#dc2323',
                 weight: 5,
                 opacity: 1,
-                fillColor: '#ffd54f',
+                fillColor: '#ffdc50',
                 fillOpacity: 0.78
             });
             if (layer.bringToFront) layer.bringToFront();
 
-            // Garder un contexte cadastral autour de la parcelle.
-            var bounds = layer.getBounds();
-            map.fitBounds(bounds.pad(1.8), { animate: false, maxZoom: 20 });
-            await waitForMapMovement();
-            await wait(350);
-
-            // Masquer les contrôles de l'interface pendant la capture.
+            // Masquer popup et contrôles pour la capture.
             var selectors = [
                 '.leaflet-control-container',
+                '.leaflet-popup',
                 '#map-title',
                 '#map-info-btn',
                 '#map-info-box',
@@ -138,7 +194,7 @@ function addLabel(layer, id) {
                 });
             });
 
-            await wait(100);
+            await wait(120);
 
             var canvas = await html2canvas(mapElement, {
                 useCORS: true,
@@ -152,109 +208,115 @@ function addLabel(layer, id) {
             var jsPDF = window.jspdf.jsPDF;
             var doc = new jsPDF('portrait', 'mm', 'a4');
 
-            // En-tête
+            // ==============================
+            // EN-TÊTE ET INFORMATIONS
+            // ==============================
+            doc.setTextColor(25, 25, 25);
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(17);
-            doc.text('FICHE PARCELLAIRE - AUACAD', 18, 18);
-            doc.setDrawColor(60, 60, 60);
-            doc.setLineWidth(0.4);
-            doc.line(18, 23, 192, 23);
+            doc.text('FICHE PARCELLAIRE - AUACAD', 15, 16);
 
-            // Sous-titre
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(9);
-            doc.text('Plan de situation de la parcelle selectionnee', 18, 29);
+            doc.setDrawColor(45, 105, 155);
+            doc.setLineWidth(0.5);
+            doc.line(15, 21, 195, 21);
 
-            // Plan de situation à gauche
-            var planX = 18;
-            var planY = 36;
-            var planW = 112;
-            var planH = 128;
-            doc.setDrawColor(160, 160, 160);
-            doc.rect(planX, planY, planW, planH);
-            doc.addImage(imgData, 'PNG', planX + 1, planY + 1, planW - 2, planH - 2);
-
-            // Cartouche d'informations à droite du plan
-            var boxX = 136;
-            var boxY = 36;
-            var boxW = 56;
-            var boxH = 94;
-            doc.setFillColor(248, 248, 248);
-            doc.setDrawColor(198, 40, 40);
-            doc.setLineWidth(0.8);
-            doc.roundedRect(boxX, boxY, boxW, boxH, 2, 2, 'FD');
-
-            doc.setTextColor(198, 40, 40);
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(12);
-            doc.text('PARCELLE ' + safeValue(p.lot), boxX + 5, boxY + 10);
-
-            doc.setTextColor(30, 30, 30);
-            doc.setFontSize(8.5);
-            var rows = [
+            doc.setFontSize(10.5);
+            var y = 30;
+            var lineGap = 7;
+            var infoRows = [
                 ['Lot', p.lot],
                 ['Nature', p.nature],
                 ['Cercle', p.cercle],
-                ['Localite', p.localite],
-                ['Surface', safeValue(p['Aire m²']) + ' m2'],
+                ['Localité', p.localite],
+                ['Surface (m²)', p['Aire m²']],
                 ['TF Global', p['TF Global']]
             ];
-            var y = boxY + 22;
-            rows.forEach(function(row) {
+
+            infoRows.forEach(function(row) {
                 doc.setFont('helvetica', 'bold');
-                doc.text(row[0] + ' :', boxX + 5, y);
+                doc.text(row[0] + ' :', 15, y);
                 doc.setFont('helvetica', 'normal');
-                var valueLines = doc.splitTextToSize(safeValue(row[1]), boxW - 10);
-                doc.text(valueLines, boxX + 5, y + 4.5);
-                y += 12 + Math.max(0, valueLines.length - 1) * 4;
+                doc.text(safeValue(row[1]), 48, y);
+                y += lineGap;
             });
 
-            // Légende de la surbrillance
-            doc.setFillColor(255, 213, 79);
-            doc.setDrawColor(198, 40, 40);
-            doc.setLineWidth(0.7);
-            doc.rect(136, 139, 8, 6, 'FD');
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(8);
-            doc.setTextColor(30, 30, 30);
-            doc.text('Parcelle concernee', 147, 144);
+            // ==============================
+            // GRAND PLAN DE SITUATION
+            // ==============================
+            var pageRect = {
+                x: 15,
+                y: 78,
+                w: 180,
+                h: 180
+            };
 
-            // Note et pied de page
-            doc.setFontSize(8);
+            doc.setDrawColor(110, 110, 110);
+            doc.setLineWidth(0.35);
+            doc.rect(pageRect.x, pageRect.y, pageRect.w, pageRect.h);
+            doc.addImage(imgData, 'PNG', pageRect.x, pageRect.y, pageRect.w, pageRect.h);
+
+            // Le fond de carte est une image, mais les parcelles sont redessinées
+            // directement dans le PDF pour garantir leur visibilité.
+            var mapRect = {
+                w: mapElement.clientWidth,
+                h: mapElement.clientHeight
+            };
+
+            // Parcelles voisines : contours seulement, sans libellés ni détails.
+            if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.eachLayer) {
+                layer_AUACAD_4.eachLayer(function(parcelLayer) {
+                    if (parcelLayer === layer) return;
+                    if (!parcelLayer.getBounds || !parcelLayer.getLatLngs) return;
+                    try {
+                        if (map.getBounds().intersects(parcelLayer.getBounds())) {
+                            drawLeafletPolygonOnPdf(doc, parcelLayer, mapRect, pageRect, false);
+                        }
+                    } catch (e) {}
+                });
+            }
+
+            // Parcelle concernée : remplissage jaune + contour rouge.
+            drawLeafletPolygonOnPdf(doc, layer, mapRect, pageRect, true);
+
+            // Petite légende, sans reprendre les attributs.
+            doc.setFillColor(255, 220, 80);
+            doc.setDrawColor(220, 35, 35);
+            doc.setLineWidth(0.7);
+            doc.rect(20, 245, 8, 5, 'FD');
+            doc.setTextColor(40, 40, 40);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8.5);
+            doc.text('Parcelle concernée', 31, 249);
+
+            // Pied de page.
+            doc.setDrawColor(45, 105, 155);
+            doc.setLineWidth(0.35);
+            doc.line(15, 274, 195, 274);
             doc.setTextColor(80, 80, 80);
-            doc.text('La parcelle concernee est mise en surbrillance sur le plan de situation.', 18, 174);
-            doc.line(18, 278, 192, 278);
             doc.setFontSize(7.5);
-            doc.text('Document genere depuis la webmap AUACAD - usage indicatif', 18, 284);
+            doc.text('Document généré depuis la webmap AUACAD - usage indicatif', 15, 281);
 
             doc.save('Fiche_Parcelle_' + safeValue(p.lot).replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf');
         } catch (error) {
             console.error('Erreur export PDF AUACAD :', error);
             alert("Une erreur est survenue pendant la génération de la fiche PDF.");
         } finally {
-            // Restaurer l'interface.
             hiddenControls.forEach(function(item) {
                 item.el.style.display = item.display;
             });
 
-            // Restaurer le style d'origine de la parcelle.
             if (typeof layer_AUACAD_4 !== 'undefined' && layer_AUACAD_4.resetStyle) {
                 layer_AUACAD_4.resetStyle(layer);
             }
 
-            // Restaurer l'emprise de carte initiale.
             map.setView(oldCenter, oldZoom, { animate: false });
 
-            // Rouvrir le popup si l'utilisateur l'avait ouvert.
             if (popupWasOpen && layer.openPopup) {
                 setTimeout(function() { layer.openPopup(); }, 150);
             }
         }
     }
 
-    // Le bouton PDF est créé dynamiquement dans le popup qgis2web.
-    // L'écoute en phase de capture remplace proprement l'ancien export
-    // sans modifier le reste de la carte.
     document.addEventListener('click', function(event) {
         var button = event.target.closest ? event.target.closest('.pdf-btn') : null;
         if (!button) return;
@@ -264,6 +326,6 @@ function addLabel(layer, id) {
         if (event.stopImmediatePropagation) event.stopImmediatePropagation();
 
         var sourceLayer = map && map._popup ? map._popup._source : null;
-        exportFicheParcellaireV2(sourceLayer);
+        exportFicheParcellaireV3(sourceLayer);
     }, true);
 })();
