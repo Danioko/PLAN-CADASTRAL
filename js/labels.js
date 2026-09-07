@@ -35,6 +35,30 @@ function addLabel(layer, id) {
     }
 }
 
+// Désactiver la surbrillance et l'ouverture des informations au survol.
+// Les popups restent liés aux parcelles et s'ouvrent donc uniquement au clic.
+(function () {
+    function disableHoverInteraction() {
+        if (typeof layer_AUACAD_4 === 'undefined' || !layer_AUACAD_4.eachLayer) {
+            setTimeout(disableHoverInteraction, 250);
+            return;
+        }
+
+        layer_AUACAD_4.eachLayer(function(parcelLayer) {
+            parcelLayer.off('mouseover');
+            parcelLayer.off('mouseout');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(disableHoverInteraction, 250);
+        });
+    } else {
+        setTimeout(disableHoverInteraction, 250);
+    }
+})();
+
 // AUACAD - Export PDF : capture fidèle de la carte, sans redessiner les parcelles.
 (function () {
     function wait(ms) { return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
