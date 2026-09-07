@@ -18,6 +18,78 @@
     function drawRing(ctx,ring,center,groundW,groundH,canvasW,canvasH,strokeStyle,lineWidth){if(!ring||ring.length<2)return;ctx.beginPath();for(var i=0;i<ring.length;i++){var pt=latLngToPixel(ring[i],center,groundW,groundH,canvasW,canvasH);if(i===0)ctx.moveTo(pt.x,pt.y);else ctx.lineTo(pt.x,pt.y);}ctx.closePath();ctx.strokeStyle=strokeStyle;ctx.lineWidth=lineWidth;ctx.stroke();}
     function renderPlanCanvas(selectedCenter,selectedRing,printScale){var canvasW=900,canvasH=800,groundW=0.180*printScale,groundH=0.160*printScale,viewBounds=geographicWindow(selectedCenter,groundW,groundH).pad(0.03),canvas=document.createElement('canvas');canvas.width=canvasW;canvas.height=canvasH;var ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvasW,canvasH);ctx.lineJoin='round';ctx.lineCap='round';if(typeof layer_AUACAD_4!=='undefined'&&layer_AUACAD_4.eachLayer){layer_AUACAD_4.eachLayer(function(parcelLayer){if(!parcelLayer||!parcelLayer.getBounds||!parcelLayer.getLatLngs)return;try{var b=parcelLayer.getBounds();if(!b||!b.isValid||!b.isValid()||!viewBounds.intersects(b))return;collectRings(parcelLayer.getLatLngs(),[]).forEach(function(ring){drawRing(ctx,ring,selectedCenter,groundW,groundH,canvasW,canvasH,'#707070',1.35);});}catch(e){}});}if(selectedRing)drawRing(ctx,selectedRing,selectedCenter,groundW,groundH,canvasW,canvasH,'#e00000',4.5);return canvas;}
 
+    function utmZoneFromLongitude(lng){
+        return Math.max(1,Math.min(60,Math.floor((lng+180)/6)+1));
+    }
+
+    function getUTMVertices(ring,center){
+        if(typeof proj4==='undefined'||!ring||!ring.length)return null;
+        var zone=utmZoneFromLongitude(center.lng);
+        var north=center.lat>=0;
+        var utm='+proj=utm +zone='+zone+' +datum=WGS84 +units=m +no_defs'+(north?'':' +south');
+        var vertices=[];
+        var limit=ring.length;
+        if(limit>1&&ring[0].lat===ring[limit-1].lat&&ring[0].lng===ring[limit-1].lng)limit--;
+        for(var i=0;i<limit;i++){
+            var xy=proj4('EPSG:4326',utm,[ring[i].lng,ring[i].lat]);
+            vertices.push({point:'P'+(i+1),x:xy[0],y:xy[1]});
+        }
+        return {zone:zone,hemisphere:north?'N':'S',vertices:vertices};
+    }
+
+    function drawCoordinateTable(doc,utmData,startY,maxRowsFirstPage){
+        if(!utmData||!utmData.vertices||!utmData.vertices.length)return;
+        var rows=utmData.vertices;
+        var title='Coordonnées des sommets — WGS 84 / UTM zone '+utmData.zone+utmData.hemisphere;
+        var left=15,totalW=180,rowH=3.0,colW=[22,79,79];
+        var maxRows=maxRowsFirstPage||8;
+
+        function drawBlock(pageRows,y,titleText){
+            doc.setTextColor(85,85,85);doc.setFont('helvetica','bold');doc.setFontSize(6.8);doc.text(titleText,left,y);
+            y+=2.2;
+            doc.setDrawColor(185,185,185);doc.setLineWidth(0.18);
+            doc.setFillColor(246,246,246);doc.rect(left,y,totalW,rowH,'FD');
+            var x1=left+colW[0],x2=x1+colW[1];
+            doc.line(x1,y,x1,y+rowH*(pageRows.length+1));doc.line(x2,y,x2,y+rowH*(pageRows.length+1));
+            doc.setTextColor(90,90,90);doc.setFont('helvetica','bold');doc.setFontSize(6.2);
+            doc.text('Point',left+colW[0]/2,y+2.05,{align:'center'});
+            doc.text('Est X (m)',x1+colW[1]/2,y+2.05,{align:'center'});
+            doc.text('Nord Y (m)',x2+colW[2]/2,y+2.05,{align:'center'});
+            for(var i=0;i<pageRows.length;i++){
+                var ry=y+rowH*(i+1);
+                doc.setFillColor(255,255,255);doc.rect(left,ry,totalW,rowH,'FD');
+                doc.line(x1,ry,x1,ry+rowH);doc.line(x2,ry,x2,ry+rowH);
+                doc.setTextColor(95,95,95);doc.setFont('helvetica','normal');doc.setFontSize(6);
+                doc.text(pageRows[i].point,left+colW[0]/2,ry+2.05,{align:'center'});
+                doc.text(pageRows[i].x.toFixed(2),x1+colW[1]-3,ry+2.05,{align:'right'});
+                doc.text(pageRows[i].y.toFixed(2),x2+colW[2]-3,ry+2.05,{align:'right'});
+            }
+        }
+
+        if(rows.length<=maxRows){
+            drawBlock(rows,startY,title);
+            return;
+        }
+
+        // Si la parcelle comporte beaucoup de sommets, la première page reste lisible
+        // et le tableau complet est reporté sur une deuxième page.
+        doc.setTextColor(110,110,110);doc.setFont('helvetica','italic');doc.setFontSize(6.2);
+        doc.text(title+' — voir tableau complet page 2',left,startY);
+        doc.addPage('a4','portrait');
+        doc.setTextColor(25,25,25);doc.setFont('helvetica','bold');doc.setFontSize(15);
+        doc.text('COORDONNÉES DES SOMMETS - '+safeValue(rows.length)+' POINTS',15,18);
+        doc.setDrawColor(45,105,155);doc.setLineWidth(0.4);doc.line(15,23,195,23);
+        var y=31;
+        var perPage=65;
+        var index=0;
+        while(index<rows.length){
+            var chunk=rows.slice(index,index+perPage);
+            if(index>0){doc.addPage('a4','portrait');y=18;}
+            drawBlock(chunk,y,title);
+            index+=chunk.length;
+        }
+    }
+
     async function exportFicheParcellaireV3(sourceLayer){
         if(!sourceLayer||!sourceLayer.feature||!sourceLayer.getLatLngs){alert("Impossible d'identifier la parcelle sélectionnée.");return;}
         try{
@@ -32,6 +104,7 @@
             var doc=new window.jspdf.jsPDF('portrait','mm','a4');
             var now=new Date();
             var printDate=String(now.getDate()).padStart(2,'0')+'/'+String(now.getMonth()+1).padStart(2,'0')+'/'+now.getFullYear();
+            var utmData=getUTMVertices(selectedRing,selectedCenter);
 
             doc.setTextColor(25,25,25);doc.setFont('helvetica','bold');doc.setFontSize(17);doc.text('FICHE PARCELLAIRE - AUACAD',15,16);
             doc.setDrawColor(45,105,155);doc.setLineWidth(0.5);doc.line(15,21,195,21);
@@ -47,6 +120,9 @@
             // Date d'impression : petite, grise et à l'extérieur du cadre, en bas à droite.
             doc.setTextColor(125,125,125);doc.setFont('helvetica','normal');doc.setFontSize(6.2);
             doc.text("Date d'impression : "+printDate,planX+frameW,planY+frameH+4,{align:'right'});
+
+            // Tableau automatique des coordonnées UTM des sommets.
+            drawCoordinateTable(doc,utmData,250,5);
 
             doc.setDrawColor(45,105,155);doc.setLineWidth(0.35);doc.line(15,274,195,274);doc.setTextColor(80,80,80);doc.setFontSize(7.5);doc.text('Document généré depuis la webmap AUACAD - usage indicatif',15,281);
             doc.save('Fiche_Parcelle_'+safeValue(p.lot).replace(/[^a-zA-Z0-9_-]/g,'_')+'.pdf');
