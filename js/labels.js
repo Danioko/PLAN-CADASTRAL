@@ -50,7 +50,7 @@ function addLabel(layer, id) {
     } else setTimeout(disableHoverInteraction,250);
 })();
 
-// AUACAD - Export PDF : capture fidèle, parcelle sélectionnée centrée.
+// AUACAD - Export PDF : capture fidèle, centrée et sans déformation.
 (function () {
     function wait(ms){ return new Promise(function(resolve){ setTimeout(resolve,ms); }); }
     function safeValue(value){ return value === null || value === undefined || value === '' ? '-' : String(value); }
@@ -79,24 +79,19 @@ function addLabel(layer, id) {
         try {
             map.closePopup();
 
-            // 1) Déterminer un zoom adapté à la parcelle.
             var parcelBounds=layer.getBounds();
             var parcelCenter=parcelBounds.getCenter();
             var targetZoom=map.getBoundsZoom(parcelBounds.pad(3.0),false);
             targetZoom=Math.min(targetZoom,20);
 
-            // 2) Centrer explicitement le centroïde de la parcelle au centre de la carte.
-            // Contrairement à fitBounds seul, le cadrage PDF reste ainsi symétrique autour du lot.
             map.setView(parcelCenter,targetZoom,{animate:false});
             await waitForMapMovement();
             map.panTo(parcelCenter,{animate:false});
             await wait(350);
 
-            // Modifier seulement le vrai contour Leaflet : aucun redessin dans jsPDF.
             layer.setStyle({ color:'#e00000', weight:6, opacity:1, fillOpacity:0 });
             if (layer.bringToFront) layer.bringToFront();
 
-            // Masquer l'interface, sans masquer les données cadastrales.
             ['.leaflet-control-container','.leaflet-popup','#map-title','#map-info-btn','#map-info-box','#coord-toggle-btn','#coord-search-box'].forEach(function(selector){
                 document.querySelectorAll(selector).forEach(function(el){
                     hiddenControls.push({el:el,display:el.style.display});
@@ -105,7 +100,6 @@ function addLabel(layer, id) {
             });
             await wait(150);
 
-            // Capture de la carte déjà centrée sur la parcelle.
             var canvas=await html2canvas(mapElement,{
                 useCORS:true,
                 allowTaint:false,
@@ -132,8 +126,19 @@ function addLabel(layer, id) {
                 y+=7;
             });
 
-            // Grand plan : l'image est utilisée telle quelle, sans aucune géométrie ajoutée.
-            var planX=15,planY=78,planW=180,planH=180;
+            // Conserver exactement le ratio de la capture pour éviter tout étirement.
+            var maxW=180;
+            var maxH=180;
+            var imgRatio=canvas.width/canvas.height;
+            var planW=maxW;
+            var planH=planW/imgRatio;
+            if (planH>maxH) {
+                planH=maxH;
+                planW=planH*imgRatio;
+            }
+            var planX=15+(maxW-planW)/2;
+            var planY=78+(maxH-planH)/2;
+
             doc.setDrawColor(110,110,110);
             doc.setLineWidth(0.35);
             doc.rect(planX,planY,planW,planH);
