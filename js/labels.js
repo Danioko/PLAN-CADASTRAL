@@ -48,10 +48,9 @@ function addLabel(layer, id) {
     }
 }
 
-// Charger le nouvel export AVANT la fin du parsing de la page.
-// Il utilise une carte Leaflet temporaire indépendante afin d'assurer
-// un centrage exact de la parcelle et de ne jamais déplacer la webmap.
-document.write('<script src="js/pdf-export-v2.js"><\\/script>');
+// Charger le moteur PDF avec une version explicite afin d'éviter
+// que le navigateur conserve une ancienne version en cache.
+document.write('<script src="js/pdf-export-v2.js?v=cotation-20260910"><\\/script>');
 
 // Désactiver la surbrillance et l'ouverture des informations au survol.
 // Les informations restent disponibles au clic sur la parcelle.
