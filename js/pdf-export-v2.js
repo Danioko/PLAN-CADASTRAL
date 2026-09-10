@@ -63,7 +63,7 @@
             var planX=15,planY=82,frameW=180,frameH=160;doc.addImage(imgData,'PNG',planX,planY,frameW,frameH);doc.setDrawColor(0,0,0);doc.setLineWidth(0.6);doc.rect(planX,planY,frameW,frameH);var nx=planX+frameW-8,ny=planY+10;doc.setTextColor(120,120,120);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.text('N',nx,ny-4,{align:'center'});doc.setFillColor(120,120,120);doc.triangle(nx,ny-2,nx-2.6,ny+6,nx+2.6,ny+6,'F');var lx=planX+6,ly=planY+frameH-9;doc.setFillColor(255,255,255);doc.setDrawColor(190,190,190);doc.setLineWidth(0.2);doc.rect(lx-2.5,ly-4.5,23,8.5,'FD');doc.setDrawColor(224,0,0);doc.setLineWidth(0.8);doc.rect(lx,ly-2.1,6,4.2);doc.setTextColor(90,90,90);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(safeValue(p.lot),lx+8.5,ly+0.9);
             doc.setTextColor(125,125,125);doc.setFont('helvetica','normal');doc.setFontSize(6.2);doc.text("Date d'impression : "+printDate,planX+frameW,planY+frameH+4,{align:'right'});
             drawCoordinateTable(doc,utmData,250,5);
-            doc.setDrawColor(45,105,155);doc.setLineWidth(0.35);doc.line(15,274,195,274);doc.setTextColor(80,80,80);doc.setFontSize(7.5);doc.text('Document généré depuis la webmap AUACAD - usage indicatif',15,281);
+            doc.setDrawColor(45,105,155);doc.setLineWidth(0.35);doc.line(15,274,195,274);doc.setTextColor(80,80,80);doc.setFontSize(7.5);doc.text('Document généré depuis la webmap MLCad - usage indicatif',15,281);
             var fileName='Fiche_'+cleanFilePart(p.lot)+'_'+cleanFilePart(p['TF Global'])+'_'+cleanFilePart(p.localite)+'.pdf';doc.save(fileName);
         }catch(error){console.error('Erreur export PDF AUACAD V3 :',error);alert("Une erreur est survenue pendant la génération de la fiche PDF.");}
     }
