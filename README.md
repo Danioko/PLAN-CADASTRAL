@@ -52,4 +52,4 @@ Pour toute question ou amélioration :
 **François Sadio Danioko**  
 (daniokof7@gmail.com)
 
-
+<!-- Redeploy GitHub Pages: 2026-09-10 -->
