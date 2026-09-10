@@ -182,8 +182,15 @@ document.write('<script src="js/pdf-export-v2.js?v=cotation-interieure-20260910"
             .auacad-actions button.primary{background:#0877c9;color:white;padding:0 14px}
             .auacad-actions button.primary:hover{background:#0667ae}
             .auacad-actions i{font-size:15px}
+
+            /* Harmonisation avec les contrôles Leaflet existants */
+            #map-info-btn{display:none!important}
+            .leaflet-control-layers:not(.leaflet-control-layers-expanded){display:none!important}
+            .leaflet-top.leaflet-left{top:76px!important;z-index:1600!important}
+            .leaflet-top.leaflet-left .leaflet-control{display:block!important;visibility:visible!important;opacity:1!important}
+
             @media(max-width:1150px){.auacad-brand{min-width:auto}.auacad-brand-text span{display:none}.auacad-actions button span{display:none}.auacad-actions button{width:40px;justify-content:center;padding:0}.auacad-actions button.primary{padding:0;width:40px}.auacad-search-wrap{max-width:none}}
-            @media(max-width:760px){#map-title{left:8px!important;right:8px!important;height:56px!important;gap:8px!important;padding:7px!important}.auacad-logo{width:36px;height:36px}.auacad-name{font-size:17px}.auacad-divider,.auacad-brand-text{display:none}.auacad-search-wrap{height:36px;min-width:0;padding:0 9px}.auacad-search-wrap input{font-size:11px}.auacad-actions{gap:2px}.auacad-actions button{width:34px;height:36px}.auacad-actions #auacad-legend-btn{display:none}}
+            @media(max-width:760px){#map-title{left:8px!important;right:8px!important;height:56px!important;gap:8px!important;padding:7px!important}.auacad-logo{width:36px;height:36px}.auacad-name{font-size:17px}.auacad-divider,.auacad-brand-text{display:none}.auacad-search-wrap{height:36px;min-width:0;padding:0 9px}.auacad-search-wrap input{font-size:11px}.auacad-actions{gap:2px}.auacad-actions button{width:34px;height:36px}.auacad-actions #auacad-legend-btn{display:none}.leaflet-top.leaflet-left{top:66px!important}}
         `;
         document.head.appendChild(style);
 
