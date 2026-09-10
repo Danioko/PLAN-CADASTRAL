@@ -6,6 +6,7 @@
 // - rendu vectoriel direct dans un canvas temporaire ;
 // - parcelle sélectionnée au centre géométrique exact du cadre ;
 // - échelle normalisée 1:500 / 1:1000 / 1:2000 / 1:5000 ;
+// - cotation automatique des côtés de la parcelle sélectionnée ;
 // - aucune déformation : 900 x 800 px -> 180 x 160 mm.
 // ============================================================
 (function () {
@@ -21,7 +22,58 @@
     function geographicWindow(center,groundW,groundH){var R=6378137,latRad=center.lat*Math.PI/180,halfLatDeg=(groundH/2)/R*180/Math.PI,cosLat=Math.max(0.000001,Math.cos(latRad)),halfLngDeg=(groundW/2)/(R*cosLat)*180/Math.PI;return L.latLngBounds([center.lat-halfLatDeg,center.lng-halfLngDeg],[center.lat+halfLatDeg,center.lng+halfLngDeg]);}
     function latLngToPixel(latlng,center,groundW,groundH,canvasW,canvasH){var R=6378137,lat0=center.lat*Math.PI/180,dLat=(latlng.lat-center.lat)*Math.PI/180,dLng=(latlng.lng-center.lng)*Math.PI/180;return{x:canvasW/2+(R*Math.cos(lat0)*dLng/groundW)*canvasW,y:canvasH/2-(R*dLat/groundH)*canvasH};}
     function drawRing(ctx,ring,center,groundW,groundH,canvasW,canvasH,strokeStyle,lineWidth){if(!ring||ring.length<2)return;ctx.beginPath();for(var i=0;i<ring.length;i++){var pt=latLngToPixel(ring[i],center,groundW,groundH,canvasW,canvasH);if(i===0)ctx.moveTo(pt.x,pt.y);else ctx.lineTo(pt.x,pt.y);}ctx.closePath();ctx.strokeStyle=strokeStyle;ctx.lineWidth=lineWidth;ctx.stroke();}
-    function renderPlanCanvas(selectedCenter,selectedRing,printScale){var canvasW=900,canvasH=800,groundW=0.180*printScale,groundH=0.160*printScale,viewBounds=geographicWindow(selectedCenter,groundW,groundH).pad(0.03),canvas=document.createElement('canvas');canvas.width=canvasW;canvas.height=canvasH;var ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvasW,canvasH);ctx.lineJoin='round';ctx.lineCap='round';if(typeof layer_AUACAD_4!=='undefined'&&layer_AUACAD_4.eachLayer){layer_AUACAD_4.eachLayer(function(parcelLayer){if(!parcelLayer||!parcelLayer.getBounds||!parcelLayer.getLatLngs)return;try{var b=parcelLayer.getBounds();if(!b||!b.isValid||!b.isValid()||!viewBounds.intersects(b))return;collectRings(parcelLayer.getLatLngs(),[]).forEach(function(ring){drawRing(ctx,ring,selectedCenter,groundW,groundH,canvasW,canvasH,'#707070',1.35);});}catch(e){}});}if(selectedRing)drawRing(ctx,selectedRing,selectedCenter,groundW,groundH,canvasW,canvasH,'#e00000',4.5);return canvas;}
+
+    function drawDimensions(ctx,ring,center,groundW,groundH,canvasW,canvasH){
+        if(!ring||ring.length<2)return;
+        var limit=ring.length;
+        if(limit>1&&ring[0].lat===ring[limit-1].lat&&ring[0].lng===ring[limit-1].lng)limit--;
+        if(limit<2)return;
+
+        var points=[];
+        var cx=0,cy=0;
+        for(var i=0;i<limit;i++){
+            var pp=latLngToPixel(ring[i],center,groundW,groundH,canvasW,canvasH);
+            points.push(pp);cx+=pp.x;cy+=pp.y;
+        }
+        cx/=limit;cy/=limit;
+
+        ctx.font='bold 14px Arial';
+        ctx.textAlign='center';
+        ctx.textBaseline='middle';
+
+        for(var j=0;j<limit;j++){
+            var k=(j+1)%limit;
+            var a=points[j],b=points[k];
+            var dx=b.x-a.x,dy=b.y-a.y;
+            var segPx=Math.sqrt(dx*dx+dy*dy);
+            if(segPx<18)continue;
+
+            var distance=map.distance(ring[j],ring[k]);
+            if(!isFinite(distance))continue;
+
+            var mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+            var nx=-dy/segPx,ny=dx/segPx;
+            var toCentroidX=cx-mx,toCentroidY=cy-my;
+            if(nx*toCentroidX+ny*toCentroidY>0){nx=-nx;ny=-ny;}
+            var offset=14;
+            var tx=mx+nx*offset,ty=my+ny*offset;
+            var angle=Math.atan2(dy,dx);
+            if(angle>Math.PI/2||angle<-Math.PI/2)angle+=Math.PI;
+
+            var label=distance.toFixed(2)+' m';
+            ctx.save();
+            ctx.translate(tx,ty);
+            ctx.rotate(angle);
+            var tw=ctx.measureText(label).width;
+            ctx.fillStyle='rgba(255,255,255,0.92)';
+            ctx.fillRect(-tw/2-3,-8,tw+6,16);
+            ctx.fillStyle='#3d3d3d';
+            ctx.fillText(label,0,0);
+            ctx.restore();
+        }
+    }
+
+    function renderPlanCanvas(selectedCenter,selectedRing,printScale){var canvasW=900,canvasH=800,groundW=0.180*printScale,groundH=0.160*printScale,viewBounds=geographicWindow(selectedCenter,groundW,groundH).pad(0.03),canvas=document.createElement('canvas');canvas.width=canvasW;canvas.height=canvasH;var ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvasW,canvasH);ctx.lineJoin='round';ctx.lineCap='round';if(typeof layer_AUACAD_4!=='undefined'&&layer_AUACAD_4.eachLayer){layer_AUACAD_4.eachLayer(function(parcelLayer){if(!parcelLayer||!parcelLayer.getBounds||!parcelLayer.getLatLngs)return;try{var b=parcelLayer.getBounds();if(!b||!b.isValid||!b.isValid()||!viewBounds.intersects(b))return;collectRings(parcelLayer.getLatLngs(),[]).forEach(function(ring){drawRing(ctx,ring,selectedCenter,groundW,groundH,canvasW,canvasH,'#707070',1.35);});}catch(e){}});}if(selectedRing){drawRing(ctx,selectedRing,selectedCenter,groundW,groundH,canvasW,canvasH,'#e00000',4.5);drawDimensions(ctx,selectedRing,selectedCenter,groundW,groundH,canvasW,canvasH);}return canvas;}
 
     function utmZoneFromLongitude(lng){
         return Math.max(1,Math.min(60,Math.floor((lng+180)/6)+1));
