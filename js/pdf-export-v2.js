@@ -1,5 +1,5 @@
 // ============================================================
-// AUACAD - EXPORT PDF V3 LEGER
+// MLCad - EXPORT PDF V3 LEGER
 // - aucun clonage de carte Leaflet ;
 // - aucun html2canvas ;
 // - aucun fond de carte/tuiles pendant l'export ;
@@ -7,6 +7,7 @@
 // - parcelle sélectionnée au centre géométrique exact du cadre ;
 // - échelle normalisée 1:500 / 1:1000 / 1:2000 / 1:5000 ;
 // - cotation automatique des côtés de la parcelle sélectionnée ;
+// - QR code vers la parcelle : LOCALITE + TF GLOBAL + LOT ;
 // - aucune déformation : 900 x 800 px -> 180 x 160 mm.
 // ============================================================
 (function () {
@@ -15,6 +16,47 @@
         var text = safeValue(value);
         if (text.normalize) text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         return text.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
+    }
+    function normalizeParcelValue(value){
+        var text=safeValue(value);
+        if(text==='-')return '';
+        if(text.normalize)text=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+        return text.trim().replace(/\s+/g,' ').toLowerCase();
+    }
+    function buildParcelUrl(properties){
+        var url=new URL(window.location.href);
+        url.hash='';
+        url.search='';
+        url.searchParams.set('localite',safeValue(properties.localite));
+        url.searchParams.set('tf',safeValue(properties['TF Global']));
+        url.searchParams.set('lot',safeValue(properties.lot));
+        return url.toString();
+    }
+    function loadQRCodeLibrary(){
+        if(typeof QRCode!=='undefined')return Promise.resolve();
+        if(window.__mlcadQrPromise)return window.__mlcadQrPromise;
+        window.__mlcadQrPromise=new Promise(function(resolve,reject){
+            var script=document.createElement('script');
+            script.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+            script.onload=resolve;
+            script.onerror=function(){reject(new Error('Impossible de charger la bibliothèque QR code.'));};
+            document.head.appendChild(script);
+        });
+        return window.__mlcadQrPromise;
+    }
+    async function makeQRCodeDataUrl(text){
+        await loadQRCodeLibrary();
+        var holder=document.createElement('div');
+        holder.style.position='fixed';holder.style.left='-9999px';holder.style.top='-9999px';
+        document.body.appendChild(holder);
+        new QRCode(holder,{text:text,width:256,height:256,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
+        await new Promise(function(resolve){setTimeout(resolve,80);});
+        var canvas=holder.querySelector('canvas');
+        var image=holder.querySelector('img');
+        var dataUrl=canvas?canvas.toDataURL('image/png'):(image?image.src:null);
+        holder.remove();
+        if(!dataUrl)throw new Error('QR code non généré.');
+        return dataUrl;
     }
     function collectRings(latlngs,out){out=out||[];if(!Array.isArray(latlngs)||!latlngs.length)return out;if(latlngs[0]&&typeof latlngs[0].lat==='number'){out.push(latlngs);return out;}latlngs.forEach(function(item){collectRings(item,out);});return out;}
     function getClickedRing(layer,clickLatLng){var rings=collectRings(layer.getLatLngs?layer.getLatLngs():[],[]);if(!rings.length)return null;var chosen=null,bestDistance=Infinity;rings.forEach(function(ring){if(!ring||ring.length<3)return;var b=L.latLngBounds(ring);if(clickLatLng&&b.contains(clickLatLng)){var d=map.distance(b.getCenter(),clickLatLng);if(d<bestDistance){bestDistance=d;chosen=ring;}}});if(!chosen&&clickLatLng){rings.forEach(function(ring){if(!ring||ring.length<3)return;var b=L.latLngBounds(ring),d=map.distance(b.getCenter(),clickLatLng);if(d<bestDistance){bestDistance=d;chosen=ring;}});}return chosen||rings[0];}
@@ -56,16 +98,39 @@
     async function exportFicheParcellaireV3(sourceLayer){
         if(!sourceLayer||!sourceLayer.feature||!sourceLayer.getLatLngs){alert("Impossible d'identifier la parcelle sélectionnée.");return;}
         try{
-            var p=sourceLayer.feature.properties||{};var clickLatLng=(map._popup&&map._popup.getLatLng)?map._popup.getLatLng():null;var selectedRing=getClickedRing(sourceLayer,clickLatLng);var selectedBounds=selectedRing?L.latLngBounds(selectedRing):sourceLayer.getBounds();var selectedCenter=selectedBounds.getCenter();var printScale=choosePrintScale(p,selectedRing);var canvas=renderPlanCanvas(selectedCenter,selectedRing,printScale);var imgData=canvas.toDataURL('image/png');var doc=new window.jspdf.jsPDF('portrait','mm','a4');var now=new Date();var printDate=String(now.getDate()).padStart(2,'0')+'/'+String(now.getMonth()+1).padStart(2,'0')+'/'+now.getFullYear();var utmData=getUTMVertices(selectedRing,selectedCenter);
+            var p=sourceLayer.feature.properties||{};var clickLatLng=(map._popup&&map._popup.getLatLng)?map._popup.getLatLng():null;var selectedRing=getClickedRing(sourceLayer,clickLatLng);var selectedBounds=selectedRing?L.latLngBounds(selectedRing):sourceLayer.getBounds();var selectedCenter=selectedBounds.getCenter();var printScale=choosePrintScale(p,selectedRing);var canvas=renderPlanCanvas(selectedCenter,selectedRing,printScale);var imgData=canvas.toDataURL('image/png');var doc=new window.jspdf.jsPDF('portrait','mm','a4');var now=new Date();var printDate=String(now.getDate()).padStart(2,'0')+'/'+String(now.getMonth()+1).padStart(2,'0')+'/'+now.getFullYear();var utmData=getUTMVertices(selectedRing,selectedCenter);var parcelUrl=buildParcelUrl(p);var qrData=null;
+            try{qrData=await makeQRCodeDataUrl(parcelUrl);}catch(qrError){console.warn('MLCad : QR code non disponible',qrError);}
             doc.setTextColor(25,25,25);doc.setFont('helvetica','bold');doc.setFontSize(17);doc.text('Fiche parcellaire MLCad',15,16);
             doc.setDrawColor(45,105,155);doc.setLineWidth(0.5);doc.line(15,21,195,21);doc.setFontSize(10.5);var y=30;
             [['Lot',p.lot],['Nature',p.nature],['Cercle',p.cercle],['Localité',p.localite],['Surface (m²)',p['Aire m²']],['TF Global',p['TF Global']],['Échelle','1:'+printScale]].forEach(function(row){doc.setFont('helvetica','bold');doc.text(row[0]+' :',15,y);doc.setFont('helvetica','normal');doc.text(safeValue(row[1]),48,y);y+=7;});
+            if(qrData){var qrX=166,qrY=28,qrSize=25;doc.addImage(qrData,'PNG',qrX,qrY,qrSize,qrSize);doc.setTextColor(95,95,95);doc.setFont('helvetica','normal');doc.setFontSize(5.4);doc.text('Consulter la parcelle',qrX+qrSize/2,qrY+qrSize+3,{align:'center'});doc.text('dans MLCad',qrX+qrSize/2,qrY+qrSize+5.5,{align:'center'});if(typeof doc.link==='function')doc.link(qrX,qrY,qrSize,qrSize,{url:parcelUrl});}
             var planX=15,planY=82,frameW=180,frameH=160;doc.addImage(imgData,'PNG',planX,planY,frameW,frameH);doc.setDrawColor(0,0,0);doc.setLineWidth(0.6);doc.rect(planX,planY,frameW,frameH);var nx=planX+frameW-8,ny=planY+10;doc.setTextColor(120,120,120);doc.setFont('helvetica','bold');doc.setFontSize(8);doc.text('N',nx,ny-4,{align:'center'});doc.setFillColor(120,120,120);doc.triangle(nx,ny-2,nx-2.6,ny+6,nx+2.6,ny+6,'F');var lx=planX+6,ly=planY+frameH-9;doc.setFillColor(255,255,255);doc.setDrawColor(190,190,190);doc.setLineWidth(0.2);doc.rect(lx-2.5,ly-4.5,23,8.5,'FD');doc.setDrawColor(224,0,0);doc.setLineWidth(0.8);doc.rect(lx,ly-2.1,6,4.2);doc.setTextColor(90,90,90);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(safeValue(p.lot),lx+8.5,ly+0.9);
             doc.setTextColor(125,125,125);doc.setFont('helvetica','normal');doc.setFontSize(6.2);doc.text("Date d'impression : "+printDate,planX+frameW,planY+frameH+4,{align:'right'});
             drawCoordinateTable(doc,utmData,250,5);
             doc.setDrawColor(45,105,155);doc.setLineWidth(0.35);doc.line(15,274,195,274);doc.setTextColor(80,80,80);doc.setFontSize(7.5);doc.text('Document généré depuis la webmap MLCad - usage indicatif',15,281);
             var fileName='Fiche_'+cleanFilePart(p.lot)+'_'+cleanFilePart(p['TF Global'])+'_'+cleanFilePart(p.localite)+'.pdf';doc.save(fileName);
-        }catch(error){console.error('Erreur export PDF AUACAD V3 :',error);alert("Une erreur est survenue pendant la génération de la fiche PDF.");}
+        }catch(error){console.error('Erreur export PDF MLCad V3 :',error);alert("Une erreur est survenue pendant la génération de la fiche PDF.");}
     }
+
+    function openParcelFromUrl(){
+        var params=new URLSearchParams(window.location.search);var localite=params.get('localite'),tf=params.get('tf'),lot=params.get('lot');
+        if(!localite||!tf||!lot)return;
+        var tries=0,maxTries=50;
+        var timer=setInterval(function(){
+            tries++;
+            if(typeof layer_AUACAD_4==='undefined'||typeof map==='undefined'){if(tries>=maxTries)clearInterval(timer);return;}
+            clearInterval(timer);var found=null;
+            layer_AUACAD_4.eachLayer(function(parcelLayer){if(found||!parcelLayer.feature)return;var p=parcelLayer.feature.properties||{};if(normalizeParcelValue(p.localite)===normalizeParcelValue(localite)&&normalizeParcelValue(p['TF Global'])===normalizeParcelValue(tf)&&normalizeParcelValue(p.lot)===normalizeParcelValue(lot))found=parcelLayer;});
+            if(found){
+                var bounds=found.getBounds&&found.getBounds();
+                if(bounds&&bounds.isValid&&bounds.isValid())map.fitBounds(bounds,{padding:[60,60],maxZoom:20});
+                setTimeout(function(){if(found.openPopup)found.openPopup();},350);
+            }else{
+                console.warn('MLCad : parcelle introuvable pour le lien direct.',{localite:localite,tf:tf,lot:lot});
+            }
+        },200);
+    }
+
     document.addEventListener('click',function(event){var button=event.target.closest?event.target.closest('.pdf-btn'):null;if(!button)return;event.preventDefault();event.stopPropagation();if(event.stopImmediatePropagation)event.stopImmediatePropagation();var sourceLayer=map&&map._popup?map._popup._source:null;exportFicheParcellaireV3(sourceLayer);},true);
+    openParcelFromUrl();
 })();
