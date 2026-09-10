@@ -1,4 +1,4 @@
-Cette webmap interactive, générée à partir de **QGIS** grâce au plugin **qgis2web** et à la bibliothèque **Leaflet**, permet la visualisation, l’exploration et la consultation du plan cadastral dénommé **AUACAD**.  
+Cette webmap interactive, générée à partir de **QGIS** grâce au plugin **qgis2web** et à la bibliothèque **Leaflet**, permet la visualisation, l’exploration et la consultation du plan cadastral dénommé **Mlcad**.  
 Ce plan regroupe un ensemble de lotissements répartis dans plusieurs régions du Mali, offrant ainsi une vue centralisée et cohérente des données cadastrales disponibles.
 
 ## 🚀 Fonctionnalités principales
