@@ -54,7 +54,8 @@
             var mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
             var nx=-dy/segPx,ny=dx/segPx;
             var toCentroidX=cx-mx,toCentroidY=cy-my;
-            if(nx*toCentroidX+ny*toCentroidY>0){nx=-nx;ny=-ny;}
+            // Oriente systématiquement la normale vers l'intérieur de la parcelle.
+            if(nx*toCentroidX+ny*toCentroidY<0){nx=-nx;ny=-ny;}
             var offset=14;
             var tx=mx+nx*offset,ty=my+ny*offset;
             var angle=Math.atan2(dy,dx);
